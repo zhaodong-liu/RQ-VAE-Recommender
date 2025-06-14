@@ -116,7 +116,7 @@ class RawMovieLens32M(MovieLens32M, PreprocessingMixin):
         df["itemId"] = df["movieId"].apply(lambda x: movie_mapping[x])
 
         df["rating"] = (2*df["rating"]).astype(int)
-        data["user", "rated", "item"].history = self._generate_user_history(
+        data["user", "rated", "item"].history = PreprocessingMixin._generate_user_history(
             df,
             features=["itemId", "rating"],
             window_size=max_seq_len if max_seq_len is not None else 200,

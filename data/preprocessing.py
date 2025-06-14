@@ -70,23 +70,58 @@ class PreprocessingMixin:
         threshold = df.select(pl.quantile(on, train_split)).item()
         return df.with_columns(is_train=pl.col(on) <= threshold)
     
+    # @staticmethod
+    # def _df_to_tensor_dict(df, features):
+    #     out = {
+    #         feat: torch.from_numpy(
+    #             rearrange(
+    #                 df.select(feat).to_numpy().squeeze().tolist(), "b d -> b d"
+    #             )
+    #         ) if df.select(pl.col(feat).list.len().max() == pl.col(feat).list.len().min()).item()
+    #         else df.get_column("itemId").to_list()
+    #         for feat in features
+    #     }
+    #     fut_out = {
+    #         feat + FUT_SUFFIX: torch.from_numpy(
+    #             df.select(feat + FUT_SUFFIX).to_numpy()
+    #         ) for feat in features
+    #     }
+    #     out.update(fut_out)
+    #     out["userId"] = torch.from_numpy(df.select("userId").to_numpy())
+    #     return out
+
     @staticmethod
     def _df_to_tensor_dict(df, features):
-        out = {
-            feat: torch.from_numpy(
-                rearrange(
-                    df.select(feat).to_numpy().squeeze().tolist(), "b d -> b d"
-                )
-            ) if df.select(pl.col(feat).list.len().max() == pl.col(feat).list.len().min()).item()
-            else df.get_column("itemId").to_list()
+        import polars as pl
+        import torch
+        from einops import rearrange
+
+        out = {}
+        for feat in features:
+            try:
+                # 判断是否等长 array（兼容 array[i64, N]）
+                lengths = df.select([
+                    pl.col(feat).arr.lengths().max().alias("max_len"),
+                    pl.col(feat).arr.lengths().min().alias("min_len")
+                ])
+                is_uniform = lengths["max_len"][0] == lengths["min_len"][0]
+
+                if is_uniform:
+                    arr = df.select(feat).to_numpy().squeeze().tolist()
+                    out[feat] = torch.from_numpy(rearrange(arr, "b d -> b d"))
+                else:
+                    out[feat] = df[feat].to_list()
+            except Exception as e:
+                print(f"Feature `{feat}` fallback due to: {e}")
+                out[feat] = df[feat].to_list()
+
+        # FUTURE 特征部分（如 itemId_fut, rating_fut）
+        fut_out = {
+            feat + FUT_SUFFIX: torch.from_numpy(df.select(feat + FUT_SUFFIX).to_numpy())
             for feat in features
         }
-        fut_out = {
-            feat + FUT_SUFFIX: torch.from_numpy(
-                df.select(feat + FUT_SUFFIX).to_numpy()
-            ) for feat in features
-        }
         out.update(fut_out)
+
         out["userId"] = torch.from_numpy(df.select("userId").to_numpy())
         return out
 
