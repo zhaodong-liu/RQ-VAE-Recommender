@@ -64,8 +64,9 @@ def train(
     model_jagged_mode=True,
     vae_hf_model_name="edobotta/rqvae-amazon-beauty"
 ):  
-    if dataset != RecDataset.AMAZON:
-        raise Exception(f"Dataset currently not supported: {dataset}.")
+    # 修改：支持AMAZON和ML_32M数据集
+    if dataset not in [RecDataset.AMAZON, RecDataset.ML_32M]:
+        raise Exception(f"Dataset currently not supported: {dataset}. Supported datasets: AMAZON, ML_32M")
 
     if wandb_logging:
         params = locals()
@@ -104,6 +105,8 @@ def train(
         subsample=False, 
         split=dataset_split
     )
+
+    # ... 后续代码保持不变
 
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     

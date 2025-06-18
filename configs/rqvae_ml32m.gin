@@ -4,7 +4,7 @@ import modules.quantize
 train.iterations=50000
 train.learning_rate=0.0001
 train.weight_decay=0.01
-train.batch_size=64
+train.batch_size=256
 train.vae_input_dim=768
 train.vae_n_cat_feats=0
 train.vae_hidden_dims=[512, 256, 128]
