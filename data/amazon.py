@@ -92,6 +92,9 @@ class AmazonReviews(InMemoryDataset, PreprocessingMixin):
     
     def process(self, max_seq_len=20) -> None:
         data = HeteroData()
+        # Ensure both genres and years are 2D tensors
+        if years.dim() == 3:
+            years = years.squeeze(-1)  # or years = years.view(N, -1) if that makes more sense
 
         with open(os.path.join(self.raw_dir, self.split, "datamaps.json"), 'r') as f:
             data_maps = json.load(f)    
