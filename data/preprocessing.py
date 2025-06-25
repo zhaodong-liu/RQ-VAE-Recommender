@@ -72,21 +72,25 @@ class PreprocessingMixin:
     
     @staticmethod
     def _df_to_tensor_dict(df, features):
-        out = {
-            feat: torch.from_numpy(
-                rearrange(
-                    df.select(feat).to_numpy().squeeze().tolist(), "b d -> b d"
-                )
-            ) if df.select(pl.col(feat).list.len().max() == pl.col(feat).list.len().min()).item()
-            else df.get_column("itemId").to_list()
-            for feat in features
-        }
+        out = {}
+
+        for feat in features:
+            dtype = df.schema[feat]
+            if isinstance(dtype, pl.List):  # 原始 List 类型
+                tensor_data = torch.tensor(df[feat].to_list())
+            elif isinstance(dtype, pl.Array):  # Fixed-length Array 类型
+                tensor_data = torch.tensor(df.select(feat).to_numpy())
+            else:
+                raise ValueError(f"Unsupported dtype for feature {feat}: {dtype}")
+            out[feat] = tensor_data
+
         fut_out = {
             feat + FUT_SUFFIX: torch.from_numpy(
                 df.select(feat + FUT_SUFFIX).to_numpy()
             ) for feat in features
         }
         out.update(fut_out)
+
         out["userId"] = torch.from_numpy(df.select("userId").to_numpy())
         return out
 
