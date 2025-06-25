@@ -131,7 +131,7 @@ def train(
     with tqdm(initial=start_iter, total=start_iter+iterations,
               disable=not accelerator.is_main_process) as pbar:
         losses = [[], [], []]
-        for iter in range(start_iter, start_iter+1+iterations):
+        for iter in range(start_iter, start_iter+iterations):
             model.train()
             total_loss = 0
             t = 0.2

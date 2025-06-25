@@ -64,8 +64,9 @@ def train(
     model_jagged_mode=True,
     vae_hf_model_name="edobotta/rqvae-amazon-beauty"
 ):  
-    if dataset != RecDataset.AMAZON:
-        raise Exception(f"Dataset currently not supported: {dataset}.")
+    # 修改：支持AMAZON和ML_32M数据集
+    if dataset not in [RecDataset.AMAZON, RecDataset.ML_32M]:
+        raise Exception(f"Dataset currently not supported: {dataset}. Supported datasets: AMAZON, ML_32M")
 
     if wandb_logging:
         params = locals()
@@ -104,6 +105,8 @@ def train(
         subsample=False, 
         split=dataset_split
     )
+
+    # ... 后续代码保持不变
 
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     
@@ -190,7 +193,7 @@ def train(
                 if wandb_logging and accelerator.is_main_process:
                     train_debug_metrics = compute_debug_metrics(tokenized_data, model_output)
 
-                accelerator.backward(total_loss)
+                accelerator.backward(loss)
                 assert model.sem_id_embedder.emb.weight.grad is not None
 
             pbar.set_description(f'loss: {total_loss.item():.4f}')
