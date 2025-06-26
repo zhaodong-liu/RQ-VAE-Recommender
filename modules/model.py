@@ -122,7 +122,6 @@ class EncoderDecoderRetrievalModel(nn.Module):
                 ], axis=1
             )
 
-        seq_lengths = batch.seq_mask.sum(axis=1).to(batch.sem_ids.device)  # 确保设备一致
         if self.jagged_mode:
             input_embedding = padded_to_jagged_tensor(input_embedding, lengths=seq_lengths+1, max_len=input_embedding.shape[1])
 
@@ -256,8 +255,7 @@ class EncoderDecoderRetrievalModel(nn.Module):
             predict_out = self.out_proj(trnsf_out)
             if self.jagged_mode:
                 # This works because batch.sem_ids_fut is fixed length, no padding.
-                # logits = rearrange(jagged_to_flattened_tensor(predict_out), "(b n) d -> b n d", b=B)[:,:-1,:].flatten(end_dim=1)
-                logits = jagged_to_flattened_tensor(predict_out)[:, :-1, :].flatten(end_dim=1)
+                logits = rearrange(jagged_to_flattened_tensor(predict_out), "(b n) d -> b n d", b=B)[:,:-1,:].flatten(end_dim=1)
                 target = batch.sem_ids_fut.flatten(end_dim=1)
                 unred_loss = rearrange(F.cross_entropy(logits, target, reduction="none", ignore_index=-1), "(b n) -> b n", b=B)
                 loss = unred_loss.sum(axis=1).mean()
