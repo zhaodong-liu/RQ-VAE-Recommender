@@ -43,7 +43,7 @@ class ItemData(Dataset):
         *args,
         force_process: bool = False,
         dataset: RecDataset = RecDataset.ML_1M,
-        train_test_split: str = "all",  # This parameter is kept for compatibility but ignored
+        train_test_split: str = "all",
         **kwargs
     ) -> None:
         
@@ -56,10 +56,14 @@ class ItemData(Dataset):
         if not os.path.exists(processed_data_path) or force_process:
             raw_data.process(max_seq_len=max_seq_len)
         
-        # Fixed: Always use all items for RQ-VAE training
-        # Since we always use all items, directly access the data without filtering
-        self.item_data = raw_data.data["item"]["x"]
-        self.item_text = raw_data.data["item"]["text"]
+        if train_test_split == "train":
+            filt = raw_data.data["item"]["is_train"]
+        elif train_test_split == "eval":
+            filt = ~raw_data.data["item"]["is_train"]
+        elif train_test_split == "all":
+            filt = torch.ones_like(raw_data.data["item"]["x"][:,0], dtype=bool)
+
+        self.item_data, self.item_text = raw_data.data["item"]["x"][filt], raw_data.data["item"]["text"][filt]
 
     def __len__(self):
         return self.item_data.shape[0]
@@ -100,8 +104,7 @@ class SeqData(Dataset):
         if not os.path.exists(processed_data_path) or force_process:
             raw_data.process(max_seq_len=max_seq_len)
 
-        # Fixed: Use the correct train/test split from sequence-level is_train
-        split = "train" if is_train else "eval"  # Changed from "test" to "eval"
+        split = "train" if is_train else "test"
         self.subsample = subsample
         self.sequence_data = raw_data.data[("user", "rated", "item")]["history"][split]
 
@@ -128,8 +131,7 @@ class SeqData(Dataset):
         user_ids = self.sequence_data["userId"][idx]
         
         if self.subsample:
-            # Fixed: Convert tensor to list before concatenation
-            seq = self.sequence_data["itemId"][idx].tolist() + self.sequence_data["itemId_fut"][idx].tolist()
+            seq = self.sequence_data["itemId"][idx] + self.sequence_data["itemId_fut"][idx].tolist()
             start_idx = random.randint(0, max(0, len(seq)-3))
             end_idx = random.randint(start_idx+3, start_idx+self.max_seq_len+1)
             sample = seq[start_idx:end_idx]
@@ -156,6 +158,7 @@ class SeqData(Dataset):
             x_fut=x_fut,
             seq_mask=(item_ids >= 0)
         )
+
 
 if __name__ == "__main__":
     dataset = ItemData("dataset/amazon", dataset=RecDataset.AMAZON, split="beauty", force_process=True)
