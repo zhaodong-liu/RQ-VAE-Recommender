@@ -14,6 +14,10 @@ class PaddedToJaggedTensor(Function):
         assert lengths.shape[0] == x.shape[0]
         assert x.is_contiguous()
 
+
+        if lengths.device != x.device:
+            lengths = lengths.to(x.device)
+
         B, N, D = x.shape
         mask = torch.arange(max_len, device=x.device).unsqueeze(0).repeat(x.shape[0], 1) < lengths.unsqueeze(1)
         ctx.save_for_backward(mask)
@@ -44,7 +48,7 @@ class PaddedToJaggedTensor(Function):
         target._size = (B, target.shape[1], D)
         target._strides = (D*target._strides[0], D, 1)
         target._values = torch.empty(jagged_batch_size, D, dtype=x.dtype, device=x.device, requires_grad=x.requires_grad)
-        target._offsets = torch.empty(len(lengths)+1, dtype=x.dtype, device=x.device, requires_grad=x.requires_grad)
+        target._offsets = torch.empty(len(lengths)+1, dtype=torch.int64, device=x.device, requires_grad=False)
         target._metadata_cache = {}
 
         grid = lambda meta: (B*triton.cdiv(N, meta['BLOCK_SIZE_N']), triton.cdiv(D, meta['BLOCK_SIZE_D']),)
@@ -85,9 +89,14 @@ def padded_to_jagged_tensor(x: Tensor, lengths: Tensor, max_len: int) -> NestedT
     return PaddedToJaggedTensor.apply(x, lengths, max_len)
 
 
-def jagged_to_flattened_tensor(x: NestedTensor) -> Tensor:
-    return x.values()
 
+from torch.nn.utils.rnn import pad_sequence
+
+def jagged_to_flattened_tensor(x):
+    if hasattr(x, 'unbind'):
+        flat_tensors = x.unbind()  # list[Tensor]
+        return pad_sequence(flat_tensors, batch_first=True, padding_value=0.0)
+    return x
 
 @triton.jit
 def _padded_to_jagged_kernel(
