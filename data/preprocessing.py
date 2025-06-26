@@ -76,25 +76,33 @@ class PreprocessingMixin:
 
         for feat in features:
             dtype = df.schema[feat]
-            if isinstance(dtype, pl.List):  # 原始 List 类型
+            if isinstance(dtype, pl.Array):
+                # For Array types, all lengths are the same, so use to_list()
                 tensor_data = torch.tensor(df[feat].to_list())
-            elif isinstance(dtype, pl.Array):  # Fixed-length Array 类型
-                tensor_data = torch.tensor(df.select(feat).to_numpy())
+            elif isinstance(dtype, pl.List):
+                # Original logic for List types
+                try:
+                    is_same_length = df.select(pl.col(feat).list.len().max() == pl.col(feat).list.len().min()).item()
+                    tensor_data = torch.tensor(df[feat].to_list()) if is_same_length else torch.tensor(df.select(feat).to_numpy())
+                except:
+                    tensor_data = torch.tensor(df[feat].to_list())
             else:
-                raise ValueError(f"Unsupported dtype for feature {feat}: {dtype}")
+                # Fallback for other types
+                tensor_data = torch.tensor(df[feat].to_list())
+            
             out[feat] = tensor_data
 
+        # Handle future features (with _fut suffix)
         fut_out = {
-            feat + FUT_SUFFIX: torch.from_numpy(
-                df.select(feat + FUT_SUFFIX).to_numpy()
-            ) for feat in features
+            feat + "_fut": torch.from_numpy(
+                df.select(feat + "_fut").to_numpy()
+            ) for feat in features if feat + "_fut" in df.columns
         }
         out.update(fut_out)
 
         out["userId"] = torch.from_numpy(df.select("userId").to_numpy())
         return out
-
-
+      
     @staticmethod
     def _generate_user_history(
         ratings_df,

@@ -63,17 +63,40 @@ def train(
 
     device = accelerator.device
 
-    train_dataset = ItemData(root=dataset_folder, dataset=dataset, force_process=force_dataset_process, train_test_split="train" if do_eval else "all", split=dataset_split)
+    # Fixed: Always use "all" for ItemData since we're learning item representations
+    # The train/eval split is at the sequence level, not item level
+    train_dataset = ItemData(
+        root=dataset_folder, 
+        dataset=dataset, 
+        force_process=force_dataset_process, 
+        train_test_split="all",  # Changed: always use all items
+        split=dataset_split
+    )
     train_sampler = BatchSampler(RandomSampler(train_dataset), batch_size, False)
     train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=None, collate_fn=lambda batch: batch)
     train_dataloader = cycle(train_dataloader)
 
     if do_eval:
-        eval_dataset = ItemData(root=dataset_folder, dataset=dataset, force_process=False, train_test_split="eval", split=dataset_split)
+        # Fixed: For evaluation, we still use all items
+        # The actual train/eval split happens at sequence level in SeqData
+        eval_dataset = ItemData(
+            root=dataset_folder, 
+            dataset=dataset, 
+            force_process=False, 
+            train_test_split="all",  # Changed: always use all items
+            split=dataset_split
+        )
         eval_sampler = BatchSampler(RandomSampler(eval_dataset), batch_size, False)
         eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler, batch_size=None, collate_fn=lambda batch: batch)
 
-    index_dataset = ItemData(root=dataset_folder, dataset=dataset, force_process=False, train_test_split="all", split=dataset_split) if do_eval else train_dataset
+    # For indexing, always use all items
+    index_dataset = ItemData(
+        root=dataset_folder, 
+        dataset=dataset, 
+        force_process=False, 
+        train_test_split="all", 
+        split=dataset_split
+    )
     
     train_dataloader = accelerator.prepare(train_dataloader)
     # TODO: Investigate bug with prepare eval_dataloader

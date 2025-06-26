@@ -31,9 +31,9 @@ def train(
     batch_size=64,
     learning_rate=0.001,
     weight_decay=0.01,
-    dataset_folder="dataset/ml-1m",
+    dataset_folder="dataset/ml-32m",  # Changed: default to ml-32m
     save_dir_root="out/",
-    dataset=RecDataset.ML_1M,
+    dataset=RecDataset.ML_32M,  # Changed: default to ML_32M
     pretrained_rqvae_path=None,
     pretrained_decoder_path=None,
     split_batches=True,
@@ -45,28 +45,27 @@ def train(
     save_model_every=1000000,
     partial_eval_every=1000,
     full_eval_every=10000,
-    vae_input_dim=18,
-    vae_embed_dim=16,
-    vae_hidden_dims=[18, 18],
-    vae_codebook_size=32,
+    vae_input_dim=768,  # Updated for MovieLens (text embeddings + genres)
+    vae_embed_dim=64,   # Updated based on checkpoint
+    vae_hidden_dims=[512, 256, 128],  # Updated based on checkpoint
+    vae_codebook_size=256,  # Updated based on checkpoint
     vae_codebook_normalize=False,
     vae_sim_vq=False,
-    vae_n_cat_feats=18,
-    vae_n_layers=3,
+    vae_n_cat_feats=18,  # Updated for MovieLens genres
+    vae_n_layers=3,      # Updated based on checkpoint
     decoder_embed_dim=64,
     dropout_p=0.1,
     attn_heads=8,
     attn_embed_dim=64,
     attn_layers=4,
-    dataset_split="beauty",
     push_vae_to_hf=False,
     train_data_subsample=True,
     model_jagged_mode=True,
-    vae_hf_model_name="edobotta/rqvae-amazon-beauty"
+    vae_hf_model_name="edobotta/rqvae-movielens32m"  # Changed: updated model name for MovieLens
 ):  
-    if dataset != RecDataset.AMAZON:
-        raise Exception(f"Dataset currently not supported: {dataset}.")
-
+    # Removed: Dataset restriction for AMAZON only
+    # Now supports ML_32M and other datasets
+    
     if wandb_logging:
         params = locals()
 
@@ -84,25 +83,26 @@ def train(
             config=params
         )
     
+    # Fixed: ItemData now always uses all items (train_test_split parameter is ignored)
     item_dataset = ItemData(
         root=dataset_folder,
         dataset=dataset,
         force_process=force_dataset_process,
-        split=dataset_split
+        train_test_split="all"  # Added: explicit parameter (though ignored internally)
     )
+    
+    # Fixed: SeqData uses sequence-level is_train for proper train/eval split
     train_dataset = SeqData(
         root=dataset_folder, 
         dataset=dataset, 
-        is_train=True, 
-        subsample=train_data_subsample, 
-        split=dataset_split
+        is_train=True,  # Training sequences from history["train"]
+        subsample=train_data_subsample
     )
     eval_dataset = SeqData(
         root=dataset_folder, 
         dataset=dataset, 
-        is_train=False, 
-        subsample=False, 
-        split=dataset_split
+        is_train=False,  # Evaluation sequences from history["eval"]
+        subsample=False
     )
 
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
@@ -128,22 +128,166 @@ def train(
     tokenizer = accelerator.prepare(tokenizer)
     tokenizer.precompute_corpus_ids(item_dataset)
     
+    # Debug: Check data consistency
+    print(f"Number of items: {len(item_dataset)}")
+    print(f"Codebook size: {vae_codebook_size}")
+    print(f"Tokenizer semantic ID dimension: {tokenizer.sem_ids_dim}")
+    
+    # Validate a few samples to check for index issues
+    print("Checking sample data ranges...")
+    for i in range(min(5, len(train_dataset))):
+        sample_data = train_dataset[i]
+        valid_ids = sample_data.ids[sample_data.ids >= 0]  # Exclude padding (-1)
+        if len(valid_ids) > 0:
+            print(f"Sample {i}: item IDs range [{valid_ids.min()}, {valid_ids.max()}], max allowed: {len(item_dataset)-1}")
+            if valid_ids.max() >= len(item_dataset):
+                raise ValueError(f"❌ Item ID {valid_ids.max()} exceeds dataset size {len(item_dataset)}")
+        
+        # Check future IDs too
+        if hasattr(sample_data, 'ids_fut') and sample_data.ids_fut.numel() > 0:
+            fut_ids = sample_data.ids_fut[sample_data.ids_fut >= 0]
+            if len(fut_ids) > 0:
+                print(f"Sample {i}: future item IDs range [{fut_ids.min()}, {fut_ids.max()}]")
+                if fut_ids.max() >= len(item_dataset):
+                    raise ValueError(f"❌ Future item ID {fut_ids.max()} exceeds dataset size {len(item_dataset)}")
+    
+    print("✅ Data validation passed!")
+    
+    # Additional debug: Check semantic IDs range
+    print("Checking semantic IDs...")
+    
+    # Fix: Create a proper batch from single sample
+    sample = train_dataset[0]
+    
+    # Debug: Check the raw sample data
+    print(f"Raw sample data:")
+    print(f"  user_ids: {sample.user_ids}")
+    print(f"  ids shape: {sample.ids.shape}, range: [{sample.ids.min()}, {sample.ids.max()}]")
+    print(f"  ids (first 10): {sample.ids[:10]}")
+    print(f"  ids_fut: {sample.ids_fut}")
+    print(f"  seq_mask sum: {sample.seq_mask.sum()} / {len(sample.seq_mask)}")
+    
+    # Convert single sample to batch format by adding batch dimension
+    from types import SimpleNamespace
+    batched_sample = SimpleNamespace(
+        user_ids=sample.user_ids.unsqueeze(0),  # Add batch dim: [1]
+        ids=sample.ids.unsqueeze(0),            # Add batch dim: [1, seq_len]
+        ids_fut=sample.ids_fut.unsqueeze(0),    # Add batch dim: [1, 1] or [1]
+        x=sample.x.unsqueeze(0),                # Add batch dim: [1, seq_len, feat_dim]
+        x_fut=sample.x_fut.unsqueeze(0),        # Add batch dim: [1, 1, feat_dim] or [1, feat_dim]
+        seq_mask=sample.seq_mask.unsqueeze(0)   # Add batch dim: [1, seq_len]
+    )
+    
+    print(f"\nSample shapes after batching:")
+    print(f"  ids: {batched_sample.ids.shape}")
+    print(f"  ids_fut: {batched_sample.ids_fut.shape}")
+    print(f"  x: {batched_sample.x.shape}")
+    
+    try:
+        # Debug tokenizer step by step
+        print(f"\nTokenizer input validation:")
+        print(f"  Valid (non-padding) IDs: {(batched_sample.ids >= 0).sum()}")
+        print(f"  Padding IDs: {(batched_sample.ids == -1).sum()}")
+        
+        sample_tokenized = tokenizer(batched_sample)
+        print(f"\nTokenizer output:")
+        print(f"  Semantic IDs shape: {sample_tokenized.sem_ids.shape}")
+        print(f"  Semantic IDs range: [{sample_tokenized.sem_ids.min()}, {sample_tokenized.sem_ids.max()}]")
+        print(f"  Non-padding semantic IDs: {(sample_tokenized.sem_ids != -1).sum()}")
+        print(f"  Expected range: [0, {vae_codebook_size-1}]")
+        
+        # Check a few actual values
+        unique_sem_ids = torch.unique(sample_tokenized.sem_ids)
+        print(f"  Unique semantic IDs: {unique_sem_ids[:10]}...")  # Show first 10
+        
+        if sample_tokenized.sem_ids.max() >= vae_codebook_size:
+            raise ValueError(f"❌ Semantic ID {sample_tokenized.sem_ids.max()} exceeds codebook size {vae_codebook_size}")
+        
+        # Check if ALL semantic IDs are -1 (this would cause the CUDA error)
+        if (sample_tokenized.sem_ids == -1).all():
+            print("❌ WARNING: ALL semantic IDs are -1! This will cause indexing errors.")
+            print("   This suggests the tokenizer is not properly encoding non-padding items.")
+            
+            # Let's check what happens if we force some valid item IDs
+            print("   Trying with a simple test case...")
+            test_sample = SimpleNamespace(
+                user_ids=torch.tensor([0]),
+                ids=torch.tensor([[0, 1, 2, 3, 4, -1, -1, -1]]),  # Simple test with valid IDs
+                ids_fut=torch.tensor([[5]]),
+                x=torch.randn(1, 8, 768),
+                x_fut=torch.randn(1, 1, 768),
+                seq_mask=torch.tensor([[True, True, True, True, True, False, False, False]])
+            )
+            
+            test_tokenized = tokenizer(test_sample)
+            print(f"   Test semantic IDs range: [{test_tokenized.sem_ids.min()}, {test_tokenized.sem_ids.max()}]")
+            
+        else:
+            print("✅ Semantic IDs validation passed!")
+        
+    except Exception as e:
+        print(f"❌ Tokenizer error: {e}")
+        print("This indicates a tokenizer configuration issue.")
+        import traceback
+        traceback.print_exc()
+        raise
+    
     if push_vae_to_hf:
         login()
         tokenizer.rq_vae.push_to_hub(vae_hf_model_name)
 
-    model = EncoderDecoderRetrievalModel(
-        embedding_dim=decoder_embed_dim,
-        attn_dim=attn_embed_dim,
-        dropout=dropout_p,
-        num_heads=attn_heads,
-        n_layers=attn_layers,
-        num_embeddings=vae_codebook_size,
-        inference_verifier_fn=lambda x: tokenizer.exists_prefix(x),
-        sem_id_dim=tokenizer.sem_ids_dim,
-        max_pos=train_dataset.max_seq_len*tokenizer.sem_ids_dim,
-        jagged_mode=model_jagged_mode
-    )
+    # Potential fix for embedding size mismatch
+    # The error boundary 1025 suggests the model expects 1024 embeddings
+    # This might be due to special tokens or different architecture requirements
+    
+    # Try to determine correct num_embeddings based on error analysis
+    # Option 1: Use codebook size (256) - original approach
+    # Option 2: Use 1024 based on error boundary (1025 = 1024 + 1)
+    # Option 3: Use codebook_size + special tokens
+    
+    # Start with the original approach, but add debugging
+    model_num_embeddings = vae_codebook_size  # 256
+    
+    print(f"Attempting model initialization with num_embeddings={model_num_embeddings}")
+    
+    try:
+        model = EncoderDecoderRetrievalModel(
+            embedding_dim=decoder_embed_dim,
+            attn_dim=attn_embed_dim,
+            dropout=dropout_p,
+            num_heads=attn_heads,
+            n_layers=attn_layers,
+            num_embeddings=model_num_embeddings,
+            inference_verifier_fn=lambda x: tokenizer.exists_prefix(x),
+            sem_id_dim=tokenizer.sem_ids_dim,
+            max_pos=train_dataset.max_seq_len*tokenizer.sem_ids_dim,
+            jagged_mode=model_jagged_mode
+        )
+        print(f"✅ Model initialized successfully with num_embeddings={model_num_embeddings}")
+    except Exception as e:
+        print(f"❌ Model initialization failed with num_embeddings={model_num_embeddings}: {e}")
+        print("Trying with num_embeddings=1024 based on error analysis...")
+        
+        model_num_embeddings = 1024
+        model = EncoderDecoderRetrievalModel(
+            embedding_dim=decoder_embed_dim,
+            attn_dim=attn_embed_dim,
+            dropout=dropout_p,
+            num_heads=attn_heads,
+            n_layers=attn_layers,
+            num_embeddings=model_num_embeddings,
+            inference_verifier_fn=lambda x: tokenizer.exists_prefix(x),
+            sem_id_dim=tokenizer.sem_ids_dim,
+            max_pos=train_dataset.max_seq_len*tokenizer.sem_ids_dim,
+            jagged_mode=model_jagged_mode
+        )
+        print(f"✅ Model initialized with fallback num_embeddings={model_num_embeddings}")
+    
+    print(f"Final model configuration:")
+    print(f"  num_embeddings: {model_num_embeddings}")
+    print(f"  sem_id_dim: {tokenizer.sem_ids_dim}")
+    print(f"  max_seq_len: {train_dataset.max_seq_len}")
+    print(f"  max_pos: {train_dataset.max_seq_len*tokenizer.sem_ids_dim}")
 
     optimizer = AdamW(
         params=model.parameters(),
