@@ -46,7 +46,7 @@ class MovieLens32M(InMemoryDataset):
         fs.rm(self.raw_dir)
         os.rename(folder, self.raw_dir)
 
-    def process(self):  # Fixed: added self parameter
+    def process():
         pass
 
 
@@ -86,8 +86,6 @@ class RawMovieLens32M(MovieLens32M, PreprocessingMixin):
         x = torch.cat([titles_emb, genres], axis=1)
 
         data['item'].x = x
-        # Add text field for ItemData compatibility
-        data['item'].text = titles_text
         # Process user data:
         full_df = pd.DataFrame({"userId": ratings_df["userId"].unique()})
         df = self._remove_low_occurrence(ratings_df, full_df, "userId")
@@ -116,18 +114,15 @@ class RawMovieLens32M(MovieLens32M, PreprocessingMixin):
         data['item', 'rated_by', 'user'].time = time
 
         df["itemId"] = df["movieId"].apply(lambda x: movie_mapping[x])
+
         df["rating"] = (2*df["rating"]).astype(int)
-        
-        # Generate user history with future features handled internally
-        history = self._generate_user_history(
+        data["user", "rated", "item"].history = self._generate_user_history(
             df,
             features=["itemId", "rating"],
             window_size=max_seq_len if max_seq_len is not None else 200,
             stride=180,
             train_split=0.8
         )
-        
-        data["user", "rated", "item"].history = history
 
         if self.pre_transform is not None:
             data = self.pre_transform(data)

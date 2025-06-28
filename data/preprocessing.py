@@ -72,37 +72,25 @@ class PreprocessingMixin:
     
     @staticmethod
     def _df_to_tensor_dict(df, features):
-        out = {}
-
-        for feat in features:
-            dtype = df.schema[feat]
-            if isinstance(dtype, pl.Array):
-                # For Array types, all lengths are the same, so use to_list()
-                tensor_data = torch.tensor(df[feat].to_list())
-            elif isinstance(dtype, pl.List):
-                # Original logic for List types
-                try:
-                    is_same_length = df.select(pl.col(feat).list.len().max() == pl.col(feat).list.len().min()).item()
-                    tensor_data = torch.tensor(df[feat].to_list()) if is_same_length else torch.tensor(df.select(feat).to_numpy())
-                except:
-                    tensor_data = torch.tensor(df[feat].to_list())
-            else:
-                # Fallback for other types
-                tensor_data = torch.tensor(df[feat].to_list())
-            
-            out[feat] = tensor_data
-
-        # Handle future features (with _fut suffix)
+        out = {
+            feat: torch.from_numpy(
+                rearrange(
+                    df.select(feat).to_numpy().squeeze().tolist(), "b d -> b d"
+                )
+            ) if df.select(pl.col(feat).list.len().max() == pl.col(feat).list.len().min()).item()
+            else df.get_column("itemId").to_list()
+            for feat in features
+        }
         fut_out = {
-            feat + "_fut": torch.from_numpy(
-                df.select(feat + "_fut").to_numpy()
-            ) for feat in features if feat + "_fut" in df.columns
+            feat + FUT_SUFFIX: torch.from_numpy(
+                df.select(feat + FUT_SUFFIX).to_numpy()
+            ) for feat in features
         }
         out.update(fut_out)
-
         out["userId"] = torch.from_numpy(df.select("userId").to_numpy())
         return out
-      
+
+
     @staticmethod
     def _generate_user_history(
         ratings_df,
