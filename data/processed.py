@@ -161,6 +161,6 @@ class SeqData(Dataset):
 
 
 if __name__ == "__main__":
-    dataset = ItemData("dataset/amazon", dataset=RecDataset.AMAZON, split="beauty", force_process=True)
+    dataset = ItemData("dataset/amazon", dataset=RecDataset.AMAZON, force_process=True)
     dataset[0]
     import pdb; pdb.set_trace()
