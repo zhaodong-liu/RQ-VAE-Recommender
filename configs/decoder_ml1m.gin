@@ -1,0 +1,49 @@
+import data.processed
+
+# 调试配置 - 禁用编译和优化
+train.iterations=10               # 极少迭代数用于调试
+train.batch_size=4               # 极小batch size
+train.learning_rate=0.001
+train.weight_decay=0.01
+
+# VAE配置
+train.vae_input_dim=768
+train.vae_hidden_dims=[512, 256, 128]
+train.vae_embed_dim=64
+train.vae_n_cat_feats=0
+train.vae_codebook_size=256
+train.vae_codebook_normalize=False
+train.vae_sim_vq=False
+train.vae_n_layers=3
+
+# 数据集配置
+train.dataset_folder="dataset/ml-1m"
+train.dataset=%data.processed.RecDataset.ML_1M
+train.force_dataset_process=False
+train.train_data_subsample=False    # 禁用子采样，简化调试
+
+# 模型配置 - 最小化
+train.decoder_embed_dim=32        # 极小嵌入维度
+train.dropout_p=0.0              # 禁用dropout
+train.attn_heads=2               # 最少attention heads
+train.attn_embed_dim=64          # 最小attention维度
+train.attn_layers=2              # 最少层数
+
+# 评估配置
+train.partial_eval_every=5
+train.full_eval_every=10
+train.save_model_every=10
+
+# 路径配置
+train.pretrained_rqvae_path="trained_models/rqvae_ml32m/checkpoint_high_entropy.pt"
+train.save_dir_root="out/decoder/ml-32m-debug/"
+
+# 调试设置
+train.wandb_logging=False        # 禁用wandb
+train.push_vae_to_hf=False
+train.model_jagged_mode=False    # 禁用jagged模式
+
+# 性能设置
+train.amp=False
+train.mixed_precision_type="no"
+train.gradient_accumulate_every=1

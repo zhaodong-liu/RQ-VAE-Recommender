@@ -11,8 +11,6 @@ from torch_geometric.data import download_url
 from torch_geometric.data import extract_zip
 from torch_geometric.io import fs
 from typing import Callable, List, Optional
-from collections import defaultdict
-import polars as pl
 
 
 class MovieLens32M(InMemoryDataset):
@@ -70,21 +68,27 @@ class RawMovieLens32M(MovieLens32M, PreprocessingMixin):
         return pd.read_csv(self.raw_paths[2])
     
     def _remap_ids(self, x):
-        """Remap IDs to start from 0 (similar to Amazon dataset)"""
+        """Remap IDs to start from 0"""
         return x - 1
 
-    def amazon_style_train_test_split(self, ratings_df, user_mapping, movie_mapping, max_seq_len=20):
+    def amazon_style_train_test_split(self, ratings_df, user_mapping, movie_mapping, max_seq_len=200):
         """
         Amazon-style sequence splitting: each user sequence is split into train/eval/test
         based on fixed positions rather than time-based global split
         """
+        print("   使用Amazon风格的序列分割...")
         splits = ["train", "eval", "test"]
         sequences = {sp: defaultdict(list) for sp in splits}
-        user_ids = []
         
         # Group ratings by user and sort by timestamp
         user_sequences = []
-        for user_id in ratings_df['userId'].unique():
+        processed_users = 0
+        total_users = len(ratings_df['userId'].unique())
+        
+        for i, user_id in enumerate(ratings_df['userId'].unique()):
+            if i % 10000 == 0:
+                print(f"   处理用户进度: {i:,}/{total_users:,} ({i/total_users*100:.1f}%)")
+                
             if user_id in user_mapping:
                 user_ratings = ratings_df[ratings_df['userId'] == user_id].sort_values('timestamp')
                 items = [movie_mapping[mid] for mid in user_ratings['movieId'] if mid in movie_mapping]
@@ -96,9 +100,16 @@ class RawMovieLens32M(MovieLens32M, PreprocessingMixin):
                         'items': items,
                         'ratings': ratings
                     })
+                    processed_users += 1
         
-        # Split each user sequence
-        for seq_data in user_sequences:
+        print(f"   有效用户序列数: {len(user_sequences):,}")
+        
+        # Split each user sequence (Amazon style)
+        print("   执行Amazon风格分割...")
+        for i, seq_data in enumerate(user_sequences):
+            if i % 5000 == 0:
+                print(f"   分割进度: {i:,}/{len(user_sequences):,} ({i/len(user_sequences)*100:.1f}%)")
+                
             user_id = seq_data['userId']
             items = seq_data['items']
             ratings = seq_data['ratings']
@@ -141,10 +152,17 @@ class RawMovieLens32M(MovieLens32M, PreprocessingMixin):
                 sequences["test"]["rating"].append(pad_sequence(test_ratings, max_seq_len))
                 sequences["test"]["userId"].append(user_id)
         
-        # Convert to polars DataFrames (similar to Amazon)
+        print(f"   训练序列数: {len(sequences['train']['userId']):,}")
+        print(f"   评估序列数: {len(sequences['eval']['userId']):,}")
+        print(f"   测试序列数: {len(sequences['test']['userId']):,}")
+        
+        # Convert to polars DataFrames (exactly like Amazon)
+        print("   转换为polars DataFrame...")
+        import polars as pl
         for sp in splits:
             if sequences[sp]["userId"]:  # Only create if not empty
                 sequences[sp] = pl.from_dict(sequences[sp])
+                print(f"   {sp} DataFrame shape: {sequences[sp].shape}")
             else:
                 # Create empty DataFrame with correct schema
                 sequences[sp] = pl.DataFrame({
@@ -156,78 +174,88 @@ class RawMovieLens32M(MovieLens32M, PreprocessingMixin):
         
         return sequences
 
-    def process(self, max_seq_len=20) -> None:
+    def process(self, max_seq_len=200) -> None:  # 改为Amazon的默认序列长度20
+        print("=" * 60)
+        print("开始处理ML-32M数据集 (Amazon格式)")
+        print("=" * 60)
+        
         data = HeteroData()
+        
+        print("1. 加载评分数据...")
         ratings_df = self._load_ratings()
+        print(f"   原始评分数: {len(ratings_df):,}")
+        print(f"   用户数: {ratings_df['userId'].nunique():,}")
+        print(f"   电影数: {ratings_df['movieId'].nunique():,}")
 
-        # Process movie data (similar to original but save text descriptions)
+        print("\n2. 处理电影数据...")
         movies_df = pd.read_csv(self.raw_paths[1], index_col='movieId')
+        print(f"   原始电影数: {len(movies_df):,}")
         
         # Remove low occurrence movies
+        print("   移除低频电影...")
         movies_df = self._remove_low_occurrence(ratings_df, movies_df, "movieId")
+        print(f"   过滤后电影数: {len(movies_df):,}")
         movie_mapping = {idx: i for i, idx in enumerate(movies_df.index)}
 
-        # Process genres
-        genres = self._process_genres(movies_df["genres"].str.get_dummies('|').values, one_hot=True)
-        genres = torch.from_numpy(genres).to(torch.float)
-
-        # Process titles and create text descriptions (Amazon-style)
+        # Process titles and create Amazon-style text descriptions
+        print("   创建Amazon风格文本描述...")
         titles_text = movies_df["title"].apply(lambda s: s.split("(")[0].strip()).tolist()
         
-        # Create Amazon-style text descriptions
+        # Create Amazon-style text descriptions (exactly like Amazon)
         sentences = movies_df.apply(
             lambda row: f"Title: {row['title'].split('(')[0].strip()}; Genres: {row['genres']};",
             axis=1
         ).tolist()
+        print(f"   示例文本: {sentences[0]}")
         
         # Create embeddings
-        titles_emb = self._encode_text_feature(sentences)
+        print("   生成文本嵌入 (这可能需要几分钟)...")
+        item_emb = self._encode_text_feature(sentences)  # 使用Amazon的变量名
+        print(f"   文本嵌入形状: {item_emb.shape}")
         
-        # Store item features (Amazon-style format)
-        data['item'].x = titles_emb  # Only use text embeddings for consistency with Amazon
-        data['item'].text = np.array(sentences)  # ← Amazon-style text storage
+        # Store item features (Amazon-style format - exactly the same)
+        data['item'].x = item_emb
+        data['item'].text = np.array(sentences)
         
         # Create Amazon-style is_train split (95% train, 5% test)
         gen = torch.Generator()
         gen.manual_seed(42)
-        data['item'].is_train = torch.rand(titles_emb.shape[0], generator=gen) > 0.05
+        data['item'].is_train = torch.rand(item_emb.shape[0], generator=gen) > 0.05
+        train_items = data['item'].is_train.sum().item()
+        test_items = (~data['item'].is_train).sum().item()
+        print(f"   物品分割: {train_items:,} 训练, {test_items:,} 测试")
         
-        # Process user data
+        print("\n3. 处理用户数据...")
         user_df = pd.DataFrame({"userId": ratings_df["userId"].unique()})
+        print(f"   原始用户数: {len(user_df):,}")
         user_df = self._remove_low_occurrence(ratings_df, user_df, "userId")
+        print(f"   过滤后用户数: {len(user_df):,}")
         user_mapping = {idx: i for i, idx in enumerate(user_df["userId"])}
 
-        # Process rating data (keep for compatibility)
+        print("\n4. 处理评分数据...")
         filtered_ratings = self._remove_low_occurrence(
             ratings_df, ratings_df, ["userId", "movieId"]
         )
+        print(f"   过滤后评分数: {len(filtered_ratings):,}")
         
-        src = [user_mapping[idx] for idx in filtered_ratings['userId'] if idx in user_mapping]
-        dst = [movie_mapping[idx] for idx in filtered_ratings['movieId'] if idx in movie_mapping]
-        edge_index = torch.tensor([src, dst])
-        
-        data['user', 'rates', 'item'].edge_index = edge_index
-        data['user', 'rates', 'item'].rating = torch.from_numpy(
-            filtered_ratings['rating'].values
-        ).to(torch.long)
-        data['user', 'rates', 'item'].time = torch.from_numpy(
-            filtered_ratings['timestamp'].values
-        )
-        
-        # Create Amazon-style sequence history
+        print("\n5. 创建Amazon风格序列历史...")
+        # Use Amazon-style sequence splitting
         sequences = self.amazon_style_train_test_split(
             filtered_ratings, user_mapping, movie_mapping, max_seq_len
         )
         
-        # Convert to tensor format (similar to Amazon)
+        print("\n6. 转换为张量格式 (Amazon风格)...")
+        # Convert to tensor format (exactly like Amazon)
         history = {}
         for split_name, split_data in sequences.items():
+            print(f"   处理{split_name}分割...")
             if len(split_data) > 0:
                 history[split_name] = {
                     "userId": torch.tensor(split_data.get_column("userId").to_list()),
                     "itemId": torch.tensor(split_data.get_column("itemId").to_list()),
                     "itemId_fut": torch.tensor(split_data.get_column("itemId_fut").to_list()),
                 }
+                print(f"   {split_name} 张量形状: userId {history[split_name]['userId'].shape}, itemId {history[split_name]['itemId'].shape}")
             else:
                 # Empty tensors for empty splits
                 history[split_name] = {
@@ -238,7 +266,21 @@ class RawMovieLens32M(MovieLens32M, PreprocessingMixin):
         
         data["user", "rated", "item"].history = history
 
+        print("\n7. 保存数据...")
         if self.pre_transform is not None:
             data = self.pre_transform(data)
 
         self.save([data], self.processed_paths[0])
+        
+        print("\n" + "=" * 60)
+        print("ML-32M数据集处理完成! (Amazon格式)")
+        print("=" * 60)
+        print("数据集统计:")
+        print(f"  电影总数: {item_emb.shape[0]:,}")
+        print(f"  训练电影: {train_items:,} ({train_items/item_emb.shape[0]*100:.1f}%)")
+        print(f"  测试电影: {test_items:,} ({test_items/item_emb.shape[0]*100:.1f}%)")
+        print(f"  训练序列: {len(history['train']['userId']):,}")
+        print(f"  评估序列: {len(history['eval']['userId']):,}")
+        print(f"  测试序列: {len(history['test']['userId']):,}")
+        print(f"  序列长度: {max_seq_len}")
+        print("=" * 60)
