@@ -22,9 +22,9 @@ from torch import nn
 from torch import Tensor
 from torch.nn import functional as F
 
-# Needed to make torch.compile succeed
-torch._dynamo.config.suppress_errors = True
-torch.set_float32_matmul_precision('high')
+# 禁用动态编译以避免Triton错误
+# torch._dynamo.config.suppress_errors = True
+# torch.set_float32_matmul_precision('high')
 
 
 class ModelOutput(NamedTuple):
@@ -244,7 +244,8 @@ class EncoderDecoderRetrievalModel(nn.Module):
             log_probas=log_probas.squeeze()
         )
             
-    @torch.compile
+    # 注释掉 @torch.compile 来避免 Triton 错误
+    # @torch.compile
     def forward(self, batch: TokenizedSeqBatch) -> ModelOutput:
         seq_mask = batch.seq_mask
         B, N = seq_mask.shape
@@ -257,16 +258,36 @@ class EncoderDecoderRetrievalModel(nn.Module):
                 # This works because batch.sem_ids_fut is fixed length, no padding.
                 logits = rearrange(jagged_to_flattened_tensor(predict_out), "(b n) d -> b n d", b=B)[:,:-1,:].flatten(end_dim=1)
                 target = batch.sem_ids_fut.flatten(end_dim=1)
+                
+                # 添加目标值的边界检查和修复
+                valid_mask = (target >= 0) & (target < self.num_embeddings)
+                invalid_mask = (target >= 0) & (target >= self.num_embeddings)
+                if invalid_mask.any():
+                    print(f"Warning: Found invalid target values: {target[invalid_mask].unique()}, max allowed: {self.num_embeddings-1}")
+                    target = torch.where(invalid_mask, -1, target)  # 将无效目标设为ignore_index
+                
                 unred_loss = rearrange(F.cross_entropy(logits, target, reduction="none", ignore_index=-1), "(b n) -> b n", b=B)
                 loss = unred_loss.sum(axis=1).mean()
+                loss_d = unred_loss.mean(axis=0)
             else:
                 logits = predict_out
                 out = logits[:, :-1, :].flatten(end_dim=1)
                 target = batch.sem_ids_fut.flatten(end_dim=1)
-                loss = rearrange(F.cross_entropy(out, target, reduction="none", ignore_index=-1), "(b n) -> b n", b=B).sum(axis=1).mean()
+                
+                # 添加目标值的边界检查和修复
+                valid_mask = (target >= 0) & (target < self.num_embeddings)
+                invalid_mask = (target >= 0) & (target >= self.num_embeddings)
+                if invalid_mask.any():
+                    print(f"Warning: Found invalid target values: {target[invalid_mask].unique()}, max allowed: {self.num_embeddings-1}")
+                    target = torch.where(invalid_mask, -1, target)  # 将无效目标设为ignore_index
+                
+                unred_loss = rearrange(F.cross_entropy(out, target, reduction="none", ignore_index=-1), "(b n) -> b n", b=B)
+                loss = unred_loss.sum(axis=1).mean()
+                loss_d = unred_loss.mean(axis=0)
+            
             if not self.training and self.jagged_mode:
                 self.transformer.cached_enc_output = None
-            loss_d = unred_loss.mean(axis=0)
+                
         elif self.jagged_mode:
             trnsf_out = trnsf_out.contiguous()
             trnsf_out_flattened = rearrange(jagged_to_flattened_tensor(trnsf_out), "(b n) d -> b n d", b=B)[:,-1,:]

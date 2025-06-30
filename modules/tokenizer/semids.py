@@ -123,7 +123,7 @@ class SemanticIdTokenizer(nn.Module):
         return rearrange(self.cached_ids[ids.flatten(), :], "(b n) d -> b (n d)", n=ids.shape[1])
     
     @torch.no_grad
-    @eval_mode
+    @eval_mode  
     def forward(self, batch: SeqBatch) -> TokenizedSeqBatch:
         # TODO: Handle output inconstency in If-else.
         # If block has to return 3-sized ids for use in precompute_corpus_ids
@@ -133,6 +133,10 @@ class SemanticIdTokenizer(nn.Module):
             sem_ids = self.rq_vae.get_semantic_ids(batch.x).sem_ids
             D = sem_ids.shape[-1]
             seq_mask, sem_ids_fut = None, None
+            
+            # 添加边界检查：确保语义ID在有效范围内
+            sem_ids = torch.clamp(sem_ids, 0, self.codebook_size - 1)
+            
         else:
             B, N = batch.ids.shape
             _, D = self.cached_ids.shape
@@ -141,6 +145,17 @@ class SemanticIdTokenizer(nn.Module):
             sem_ids[~seq_mask] = -1
 
             sem_ids_fut = self._tokenize_seq_batch_from_cached(batch.ids_fut)
+            
+            # 添加边界检查：确保所有语义ID在有效范围内
+            valid_mask = (sem_ids >= 0) & (sem_ids < self.codebook_size)
+            sem_ids = torch.where(valid_mask, sem_ids, -1)
+            
+            if sem_ids_fut is not None:
+                valid_fut_mask = (sem_ids_fut >= 0) & (sem_ids_fut < self.codebook_size)
+                invalid_fut_mask = (sem_ids_fut >= 0) & (sem_ids_fut >= self.codebook_size)
+                if invalid_fut_mask.any():
+                    print(f"Warning in tokenizer: Found invalid future sem_ids: {sem_ids_fut[invalid_fut_mask].unique()}, max allowed: {self.codebook_size-1}")
+                sem_ids_fut = torch.where(valid_fut_mask, sem_ids_fut, -1)
         
         token_type_ids = torch.arange(D, device=sem_ids.device).repeat(B, N)
         token_type_ids_fut = torch.arange(D, device=sem_ids.device).repeat(B, 1)
