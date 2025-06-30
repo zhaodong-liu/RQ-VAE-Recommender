@@ -19,7 +19,7 @@ train.vae_n_layers=3
 # 数据集配置
 train.dataset_folder="dataset/ml-32m"
 train.dataset=%data.processed.RecDataset.ML_32M
-train.force_dataset_process=True
+train.force_dataset_process=False
 train.train_data_subsample=False    # 禁用子采样，简化调试
 
 # 模型配置 - 保守设置
@@ -35,7 +35,7 @@ train.full_eval_every=100
 train.save_model_every=100
 
 # 路径配置
-train.pretrained_rqvae_path="trained_models/rqvae_ml32m/checkpoint_high_entropy.pt"
+train.pretrained_rqvae_path="/scratch/zl4789/RQ-VAE-Recommender/out/rqvae/amazon/checkpoint_399999.pt"
 train.save_dir_root="out/decoder/ml-32m-safe/"
 
 # 调试设置
