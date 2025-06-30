@@ -3,6 +3,7 @@ import os.path as osp
 import pandas as pd
 import torch
 import numpy as np
+from collections import defaultdict
 
 from data.preprocessing import PreprocessingMixin
 from torch_geometric.data import HeteroData
@@ -12,7 +13,6 @@ from torch_geometric.data import extract_zip
 from torch_geometric.io import fs
 from typing import Callable, List, Optional
 
-from collections import defaultdict
 
 class MovieLens32M(InMemoryDataset):
     url = 'https://files.grouplens.org/datasets/movielens/ml-32m.zip'
@@ -72,112 +72,105 @@ class RawMovieLens32M(MovieLens32M, PreprocessingMixin):
         """Remap IDs to start from 0"""
         return x - 1
 
-    def amazon_style_train_test_split(self, ratings_df, user_mapping, movie_mapping, max_seq_len=200):
+    def optimized_amazon_style_train_test_split(self, ratings_df, user_mapping, movie_mapping, max_seq_len=200):
         """
-        Amazon-style sequence splitting: each user sequence is split into train/eval/test
-        based on fixed positions rather than time-based global split
+        优化版本的Amazon风格序列分割，使用向量化操作提高速度
         """
-        print("   使用Amazon风格的序列分割...")
+        print("   使用优化的Amazon风格序列分割...")
+        
+        # 首先过滤出有效的用户和电影
+        print("   过滤有效的评分数据...")
+        valid_ratings = ratings_df[
+            (ratings_df['userId'].isin(user_mapping.keys())) & 
+            (ratings_df['movieId'].isin(movie_mapping.keys()))
+        ].copy()
+        
+        # 映射ID
+        print("   映射用户和电影ID...")
+        valid_ratings['mapped_userId'] = valid_ratings['userId'].map(user_mapping)
+        valid_ratings['mapped_movieId'] = valid_ratings['movieId'].map(movie_mapping)
+        
+        # 按用户和时间排序
+        print("   按用户和时间排序...")
+        valid_ratings = valid_ratings.sort_values(['mapped_userId', 'timestamp'])
+        
+        # 使用pandas groupby进行向量化处理
+        print("   按用户分组...")
+        user_groups = valid_ratings.groupby('mapped_userId')
+        
         splits = ["train", "eval", "test"]
         sequences = {sp: defaultdict(list) for sp in splits}
         
-        # Group ratings by user and sort by timestamp
-        user_sequences = []
-        processed_users = 0
-        total_users = len(ratings_df['userId'].unique())
+        print("   处理用户序列...")
+        processed_count = 0
+        total_users = len(user_groups)
         
-        for i, user_id in enumerate(ratings_df['userId'].unique()):
-            if i % 10000 == 0:
-                print(f"   处理用户进度: {i:,}/{total_users:,} ({i/total_users*100:.1f}%)")
+        for user_id, group in user_groups:
+            if processed_count % 10000 == 0:
+                print(f"   处理进度: {processed_count:,}/{total_users:,} ({processed_count/total_users*100:.1f}%)")
+            
+            # 获取该用户的电影序列
+            items = group['mapped_movieId'].tolist()
+            ratings = group['rating'].tolist()
+            
+            # 只处理至少有3个交互的用户
+            if len(items) >= 3:
+                # Amazon风格分割
+                train_items = items[:-2]
+                eval_items = items[-(max_seq_len+2):-2] if len(items) >= max_seq_len+2 else items[:-2]
+                test_items = items[-(max_seq_len+1):-1] if len(items) >= max_seq_len+1 else items[:-1]
                 
-            if user_id in user_mapping:
-                user_ratings = ratings_df[ratings_df['userId'] == user_id].sort_values('timestamp')
-                items = [movie_mapping[mid] for mid in user_ratings['movieId'] if mid in movie_mapping]
-                ratings = user_ratings['rating'].tolist()
+                # 填充或截断序列
+                def pad_sequence(seq, target_len):
+                    if len(seq) > target_len:
+                        return seq[-target_len:]
+                    else:
+                        return seq + [-1] * (target_len - len(seq))
                 
-                if len(items) >= 3:  # Need at least 3 interactions for splitting
-                    user_sequences.append({
-                        'userId': user_mapping[user_id],
-                        'items': items,
-                        'ratings': ratings
-                    })
-                    processed_users += 1
-        
-        print(f"   有效用户序列数: {len(user_sequences):,}")
-        
-        # Split each user sequence (Amazon style)
-        print("   执行Amazon风格分割...")
-        for i, seq_data in enumerate(user_sequences):
-            if i % 5000 == 0:
-                print(f"   分割进度: {i:,}/{len(user_sequences):,} ({i/len(user_sequences)*100:.1f}%)")
+                # 添加到训练集
+                if len(train_items) > 0:
+                    sequences["train"]["itemId"].append(pad_sequence(train_items, max_seq_len))
+                    sequences["train"]["itemId_fut"].append(items[-2] if len(items) >= 2 else -1)
+                    sequences["train"]["userId"].append(user_id)
                 
-            user_id = seq_data['userId']
-            items = seq_data['items']
-            ratings = seq_data['ratings']
+                # 添加到评估集
+                if len(eval_items) > 0:
+                    sequences["eval"]["itemId"].append(pad_sequence(eval_items, max_seq_len))
+                    sequences["eval"]["itemId_fut"].append(items[-2] if len(items) >= 2 else -1)
+                    sequences["eval"]["userId"].append(user_id)
+                
+                # 添加到测试集
+                if len(test_items) > 0:
+                    sequences["test"]["itemId"].append(pad_sequence(test_items, max_seq_len))
+                    sequences["test"]["itemId_fut"].append(items[-1] if len(items) >= 1 else -1)
+                    sequences["test"]["userId"].append(user_id)
             
-            # Amazon-style splitting
-            train_items = items[:-2]
-            train_ratings = ratings[:-2] if len(ratings) > 2 else []
-            
-            eval_items = items[-(max_seq_len+2):-2] if len(items) >= max_seq_len+2 else items[:-2]
-            eval_ratings = ratings[-(max_seq_len+2):-2] if len(ratings) >= max_seq_len+2 else ratings[:-2]
-            
-            test_items = items[-(max_seq_len+1):-1] if len(items) >= max_seq_len+1 else items[:-1]
-            test_ratings = ratings[-(max_seq_len+1):-1] if len(ratings) >= max_seq_len+1 else ratings[:-1]
-            
-            # Pad sequences to max_seq_len
-            def pad_sequence(seq, target_len):
-                if len(seq) > target_len:
-                    return seq[-target_len:]
-                else:
-                    return seq + [-1] * (target_len - len(seq))
-            
-            # Store train data
-            if len(train_items) > 0:
-                sequences["train"]["itemId"].append(pad_sequence(train_items, max_seq_len))
-                sequences["train"]["itemId_fut"].append(items[-2] if len(items) >= 2 else -1)
-                sequences["train"]["rating"].append(pad_sequence(train_ratings, max_seq_len))
-                sequences["train"]["userId"].append(user_id)
-            
-            # Store eval data
-            if len(eval_items) > 0:
-                sequences["eval"]["itemId"].append(pad_sequence(eval_items, max_seq_len))
-                sequences["eval"]["itemId_fut"].append(items[-2] if len(items) >= 2 else -1)
-                sequences["eval"]["rating"].append(pad_sequence(eval_ratings, max_seq_len))
-                sequences["eval"]["userId"].append(user_id)
-            
-            # Store test data  
-            if len(test_items) > 0:
-                sequences["test"]["itemId"].append(pad_sequence(test_items, max_seq_len))
-                sequences["test"]["itemId_fut"].append(items[-1] if len(items) >= 1 else -1)
-                sequences["test"]["rating"].append(pad_sequence(test_ratings, max_seq_len))
-                sequences["test"]["userId"].append(user_id)
+            processed_count += 1
         
+        print(f"   处理完成! 有效用户: {processed_count:,}")
         print(f"   训练序列数: {len(sequences['train']['userId']):,}")
         print(f"   评估序列数: {len(sequences['eval']['userId']):,}")
         print(f"   测试序列数: {len(sequences['test']['userId']):,}")
         
-        # Convert to polars DataFrames (exactly like Amazon)
+        # 转换为polars DataFrames
         print("   转换为polars DataFrame...")
         import polars as pl
         for sp in splits:
-            if sequences[sp]["userId"]:  # Only create if not empty
+            if sequences[sp]["userId"]:
                 sequences[sp] = pl.from_dict(sequences[sp])
                 print(f"   {sp} DataFrame shape: {sequences[sp].shape}")
             else:
-                # Create empty DataFrame with correct schema
                 sequences[sp] = pl.DataFrame({
                     "userId": [],
                     "itemId": [],
-                    "itemId_fut": [],
-                    "rating": []
+                    "itemId_fut": []
                 })
         
         return sequences
 
-    def process(self, max_seq_len=200) -> None:  # 改为Amazon的默认序列长度20
+    def process(self, max_seq_len=200) -> None:
         print("=" * 60)
-        print("开始处理ML-32M数据集 (Amazon格式)")
+        print("开始处理ML-32M数据集 (优化版Amazon格式)")
         print("=" * 60)
         
         data = HeteroData()
@@ -187,6 +180,12 @@ class RawMovieLens32M(MovieLens32M, PreprocessingMixin):
         print(f"   原始评分数: {len(ratings_df):,}")
         print(f"   用户数: {ratings_df['userId'].nunique():,}")
         print(f"   电影数: {ratings_df['movieId'].nunique():,}")
+
+        # 可选：为了测试，可以只使用部分数据
+        # 取消注释下面的行来使用10%的数据进行快速测试
+        # print("   ⚠️  使用10%数据进行快速测试...")
+        # ratings_df = ratings_df.sample(frac=0.1, random_state=42)
+        # print(f"   采样后评分数: {len(ratings_df):,}")
 
         print("\n2. 处理电影数据...")
         movies_df = pd.read_csv(self.raw_paths[1], index_col='movieId')
@@ -200,9 +199,6 @@ class RawMovieLens32M(MovieLens32M, PreprocessingMixin):
 
         # Process titles and create Amazon-style text descriptions
         print("   创建Amazon风格文本描述...")
-        titles_text = movies_df["title"].apply(lambda s: s.split("(")[0].strip()).tolist()
-        
-        # Create Amazon-style text descriptions (exactly like Amazon)
         sentences = movies_df.apply(
             lambda row: f"Title: {row['title'].split('(')[0].strip()}; Genres: {row['genres']};",
             axis=1
@@ -211,14 +207,14 @@ class RawMovieLens32M(MovieLens32M, PreprocessingMixin):
         
         # Create embeddings
         print("   生成文本嵌入 (这可能需要几分钟)...")
-        item_emb = self._encode_text_feature(sentences)  # 使用Amazon的变量名
+        item_emb = self._encode_text_feature(sentences)
         print(f"   文本嵌入形状: {item_emb.shape}")
         
-        # Store item features (Amazon-style format - exactly the same)
+        # Store item features
         data['item'].x = item_emb
         data['item'].text = np.array(sentences)
         
-        # Create Amazon-style is_train split (95% train, 5% test)
+        # Create is_train split
         gen = torch.Generator()
         gen.manual_seed(42)
         data['item'].is_train = torch.rand(item_emb.shape[0], generator=gen) > 0.05
@@ -239,14 +235,13 @@ class RawMovieLens32M(MovieLens32M, PreprocessingMixin):
         )
         print(f"   过滤后评分数: {len(filtered_ratings):,}")
         
-        print("\n5. 创建Amazon风格序列历史...")
-        # Use Amazon-style sequence splitting
-        sequences = self.amazon_style_train_test_split(
+        print("\n5. 创建优化的Amazon风格序列历史...")
+        # 使用优化版本的序列分割
+        sequences = self.optimized_amazon_style_train_test_split(
             filtered_ratings, user_mapping, movie_mapping, max_seq_len
         )
         
-        print("\n6. 转换为张量格式 (Amazon风格)...")
-        # Convert to tensor format (exactly like Amazon)
+        print("\n6. 转换为张量格式...")
         history = {}
         for split_name, split_data in sequences.items():
             print(f"   处理{split_name}分割...")
@@ -258,7 +253,6 @@ class RawMovieLens32M(MovieLens32M, PreprocessingMixin):
                 }
                 print(f"   {split_name} 张量形状: userId {history[split_name]['userId'].shape}, itemId {history[split_name]['itemId'].shape}")
             else:
-                # Empty tensors for empty splits
                 history[split_name] = {
                     "userId": torch.tensor([]),
                     "itemId": torch.tensor([]).reshape(0, max_seq_len),
@@ -274,7 +268,7 @@ class RawMovieLens32M(MovieLens32M, PreprocessingMixin):
         self.save([data], self.processed_paths[0])
         
         print("\n" + "=" * 60)
-        print("ML-32M数据集处理完成! (Amazon格式)")
+        print("ML-32M数据集处理完成! (优化版Amazon格式)")
         print("=" * 60)
         print("数据集统计:")
         print(f"  电影总数: {item_emb.shape[0]:,}")
