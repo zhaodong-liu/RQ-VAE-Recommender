@@ -12,6 +12,7 @@ from torch_geometric.data import extract_zip
 from torch_geometric.io import fs
 from typing import Callable, List, Optional
 
+from collections import defaultdict
 
 class MovieLens32M(InMemoryDataset):
     url = 'https://files.grouplens.org/datasets/movielens/ml-32m.zip'
