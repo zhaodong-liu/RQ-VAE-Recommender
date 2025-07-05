@@ -72,7 +72,7 @@ class RawMovieLens32M(MovieLens32M, PreprocessingMixin):
         """Remap IDs to start from 0"""
         return x - 1
 
-    def optimized_amazon_style_train_test_split(self, ratings_df, user_mapping, movie_mapping, max_seq_len=200):
+    def optimized_amazon_style_train_test_split(self, ratings_df, user_mapping, movie_mapping, max_seq_len=20):
         """
         优化版本的Amazon风格序列分割，使用向量化操作提高速度
         """

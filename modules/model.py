@@ -98,53 +98,195 @@ class EncoderDecoderRetrievalModel(nn.Module):
         self.in_proj_context = nn.Linear(embedding_dim, attn_dim, bias=False)
         self.out_proj = nn.Linear(attn_dim, num_embeddings, bias=False)
     
-    def _predict(self, batch: TokenizedSeqBatch) -> AttentionInput:
-        user_emb = self.user_id_embedder(batch.user_ids)
-        sem_ids_emb = self.sem_id_embedder(batch)
-        sem_ids_emb, sem_ids_emb_fut = sem_ids_emb.seq, sem_ids_emb.fut
-        seq_lengths = batch.seq_mask.sum(axis=1)
+    # def _predict(self, batch: TokenizedSeqBatch) -> AttentionInput:
+    #     user_emb = self.user_id_embedder(batch.user_ids)
+    #     sem_ids_emb = self.sem_id_embedder(batch)
+    #     sem_ids_emb, sem_ids_emb_fut = sem_ids_emb.seq, sem_ids_emb.fut
+    #     seq_lengths = batch.seq_mask.sum(axis=1)
         
-        B, N, D = sem_ids_emb.shape
+    #     B, N, D = sem_ids_emb.shape
 
-        pos_max = N // self.sem_id_dim
-        # pos = torch.arange(pos_max, device=batch.sem_ids.device).repeat_interleave(self.sem_id_dim)
+    #     pos_max = N // self.sem_id_dim
+    #     # pos = torch.arange(pos_max, device=batch.sem_ids.device).repeat_interleave(self.sem_id_dim)
           
-        pos = torch.arange(N, device=sem_ids_emb.device).unsqueeze(0)
-        wpe = self.wpe(pos)
+    #     pos = torch.arange(N, device=sem_ids_emb.device).unsqueeze(0)
+    #     wpe = self.wpe(pos)
 
-        input_embedding = torch.cat([user_emb, wpe + sem_ids_emb], axis=1)
-        input_embedding_fut = self.bos_emb.repeat(B, 1, 1)
-        if sem_ids_emb_fut is not None:
-            tte_fut = self.tte(batch.token_type_ids_fut)
-            input_embedding_fut = torch.cat([
-                input_embedding_fut, 
-                sem_ids_emb_fut + tte_fut
-                ], axis=1
-            )
+    #     input_embedding = torch.cat([user_emb, wpe + sem_ids_emb], axis=1)
+    #     input_embedding_fut = self.bos_emb.repeat(B, 1, 1)
+    #     if sem_ids_emb_fut is not None:
+    #         tte_fut = self.tte(batch.token_type_ids_fut)
+    #         input_embedding_fut = torch.cat([
+    #             input_embedding_fut, 
+    #             sem_ids_emb_fut + tte_fut
+    #             ], axis=1
+    #         )
 
-        if self.jagged_mode:
-            input_embedding = padded_to_jagged_tensor(input_embedding, lengths=seq_lengths+1, max_len=input_embedding.shape[1])
+    #     if self.jagged_mode:
+    #         input_embedding = padded_to_jagged_tensor(input_embedding, lengths=seq_lengths+1, max_len=input_embedding.shape[1])
 
-            seq_lengths_fut = torch.tensor(input_embedding_fut.shape[1], device=input_embedding_fut.device, dtype=torch.int64).repeat(B)
-            input_embedding_fut = padded_to_jagged_tensor(input_embedding_fut, lengths=seq_lengths_fut, max_len=input_embedding_fut.shape[1])
-        else:
-            mem_mask = torch.cat([
-                torch.ones(B, 1, dtype=torch.bool, device=batch.seq_mask.device),
-                batch.seq_mask
-            ], axis=1)
-            f_mask = torch.zeros_like(mem_mask, dtype=torch.float32)
-            f_mask[~mem_mask] = float("-inf")
+    #         seq_lengths_fut = torch.tensor(input_embedding_fut.shape[1], device=input_embedding_fut.device, dtype=torch.int64).repeat(B)
+    #         input_embedding_fut = padded_to_jagged_tensor(input_embedding_fut, lengths=seq_lengths_fut, max_len=input_embedding_fut.shape[1])
+    #     else:
+    #         mem_mask = torch.cat([
+    #             torch.ones(B, 1, dtype=torch.bool, device=batch.seq_mask.device),
+    #             batch.seq_mask
+    #         ], axis=1)
+    #         f_mask = torch.zeros_like(mem_mask, dtype=torch.float32)
+    #         f_mask[~mem_mask] = float("-inf")
         
-        transformer_context = self.in_proj_context(self.do(self.norm(input_embedding)))
-        transformer_input = self.in_proj(self.do(self.norm_cxt(input_embedding_fut)))
+    #     transformer_context = self.in_proj_context(self.do(self.norm(input_embedding)))
+    #     transformer_input = self.in_proj(self.do(self.norm_cxt(input_embedding_fut)))
         
-        if self.jagged_mode:
-            transformer_output = self.transformer(x=transformer_input, context=transformer_context, padding_mask=batch.seq_mask, jagged=self.jagged_mode)
-        else:
-            causal_mask = nn.Transformer.generate_square_subsequent_mask(transformer_input.shape[1])
-            transformer_output = self.transformer(src=transformer_context, tgt=transformer_input, tgt_is_causal=True, tgt_mask=causal_mask, src_key_padding_mask=f_mask, memory_key_padding_mask=f_mask)
+    #     if self.jagged_mode:
+    #         transformer_output = self.transformer(x=transformer_input, context=transformer_context, padding_mask=batch.seq_mask, jagged=self.jagged_mode)
+    #     else:
+    #         causal_mask = nn.Transformer.generate_square_subsequent_mask(transformer_input.shape[1])
+    #         transformer_output = self.transformer(src=transformer_context, tgt=transformer_input, tgt_is_causal=True, tgt_mask=causal_mask, src_key_padding_mask=f_mask, memory_key_padding_mask=f_mask)
 
-        return transformer_output
+    #     return transformer_output
+    def _predict(self, batch: TokenizedSeqBatch) -> AttentionInput:
+        # print(f"\n🔍 _predict 方法开始调试:")
+        # print(f"  输入batch信息:")
+        # print(f"    user_ids: {batch.user_ids.shape if batch.user_ids is not None else None}")
+        # print(f"    sem_ids: {batch.sem_ids.shape}, range=[{batch.sem_ids.min()}, {batch.sem_ids.max()}]")
+        # print(f"    sem_ids_fut: {batch.sem_ids_fut.shape if batch.sem_ids_fut is not None else None}")
+        # if batch.sem_ids_fut is not None:
+        #     print(f"    sem_ids_fut range: [{batch.sem_ids_fut.min()}, {batch.sem_ids_fut.max()}]")
+        # print(f"    token_type_ids: {batch.token_type_ids.shape}, range=[{batch.token_type_ids.min()}, {batch.token_type_ids.max()}]")
+        # print(f"    seq_mask: {batch.seq_mask.shape}, sum={batch.seq_mask.sum()}")
+
+        # # Step 1: User embedding
+        # try:
+        #     print(f"  Step 1: User embedding...")
+        #     user_emb = self.user_id_embedder(batch.user_ids)
+        #     print(f"    ✅ user_emb shape: {user_emb.shape}")
+        # except Exception as e:
+        #     print(f"    ❌ User embedding失败: {e}")
+        #     raise e
+
+        # # Step 2: Semantic ID embedding
+        # try:
+        #     print(f"  Step 2: Semantic ID embedding...")
+        #     sem_ids_emb = self.sem_id_embedder(batch)
+        #     sem_ids_emb, sem_ids_emb_fut = sem_ids_emb.seq, sem_ids_emb.fut
+        #     print(f"    ✅ sem_ids_emb shape: {sem_ids_emb.shape}")
+        #     if sem_ids_emb_fut is not None:
+        #         print(f"    ✅ sem_ids_emb_fut shape: {sem_ids_emb_fut.shape}")
+        # except Exception as e:
+        #     print(f"    ❌ Semantic ID embedding失败: {e}")
+        #     raise e
+
+        # seq_lengths = batch.seq_mask.sum(axis=1)
+        # B, N, D = sem_ids_emb.shape
+        # print(f"  Tensor shapes: B={B}, N={N}, D={D}")
+
+        # # Step 3: Position encoding
+        # try:
+        #     print(f"  Step 3: Position encoding...")
+        #     pos = torch.arange(N, device=sem_ids_emb.device).unsqueeze(0)
+        #     print(f"    pos shape: {pos.shape}, range=[{pos.min()}, {pos.max()}]")
+            
+        #     # 检查position embedding的范围
+        #     if pos.max() >= self.wpe.num_embeddings:
+        #         print(f"    ❌ Position超出范围: {pos.max()} >= {self.wpe.num_embeddings}")
+        #         raise RuntimeError(f"Position index {pos.max()} >= {self.wpe.num_embeddings}")
+            
+        #     wpe = self.wpe(pos)
+        #     print(f"    ✅ wpe shape: {wpe.shape}")
+        # except Exception as e:
+        #     print(f"    ❌ Position encoding失败: {e}")
+        #     raise e
+
+        # # Step 4: Input embedding construction
+        # try:
+        #     print(f"  Step 4: Input embedding construction...")
+        #     input_embedding = torch.cat([user_emb, wpe + sem_ids_emb], axis=1)
+        #     print(f"    ✅ input_embedding shape: {input_embedding.shape}")
+            
+        #     input_embedding_fut = self.bos_emb.repeat(B, 1, 1)
+        #     print(f"    ✅ input_embedding_fut initial shape: {input_embedding_fut.shape}")
+            
+        #     if sem_ids_emb_fut is not None:
+        #         # 检查token_type_ids_fut的范围
+        #         if batch.token_type_ids_fut.max() >= self.tte_fut.num_embeddings:
+        #             print(f"    ❌ token_type_ids_fut超出范围: {batch.token_type_ids_fut.max()} >= {self.tte_fut.num_embeddings}")
+        #             raise RuntimeError(f"token_type_ids_fut {batch.token_type_ids_fut.max()} >= {self.tte_fut.num_embeddings}")
+                
+        #         tte_fut = self.tte_fut(batch.token_type_ids_fut)
+        #         print(f"    ✅ tte_fut shape: {tte_fut.shape}")
+                
+        #         input_embedding_fut = torch.cat([
+        #             input_embedding_fut, 
+        #             sem_ids_emb_fut + tte_fut
+        #         ], axis=1)
+        #         print(f"    ✅ input_embedding_fut final shape: {input_embedding_fut.shape}")
+        # except Exception as e:
+        #     print(f"    ❌ Input embedding construction失败: {e}")
+        #     raise e
+
+        # # Step 5: 处理jagged/padding
+        # if self.jagged_mode:
+        #     print(f"  Step 5: Jagged tensor conversion...")
+        #     try:
+        #         input_embedding = padded_to_jagged_tensor(input_embedding, lengths=seq_lengths+1, max_len=input_embedding.shape[1])
+        #         print(f"    ✅ input_embedding jagged conversion成功")
+
+        #         seq_lengths_fut = torch.tensor(input_embedding_fut.shape[1], device=input_embedding_fut.device, dtype=torch.int64).repeat(B)
+        #         input_embedding_fut = padded_to_jagged_tensor(input_embedding_fut, lengths=seq_lengths_fut, max_len=input_embedding_fut.shape[1])
+        #         print(f"    ✅ input_embedding_fut jagged conversion成功")
+        #     except Exception as e:
+        #         print(f"    ❌ Jagged conversion失败: {e}")
+        #         raise e
+        # else:
+        #     print(f"  Step 5: Standard tensor processing...")
+        #     mem_mask = torch.cat([
+        #         torch.ones(B, 1, dtype=torch.bool, device=batch.seq_mask.device),
+        #         batch.seq_mask
+        #     ], axis=1)
+        #     f_mask = torch.zeros_like(mem_mask, dtype=torch.float32)
+        #     f_mask[~mem_mask] = float("-inf")
+        #     print(f"    ✅ mask创建成功: f_mask shape={f_mask.shape}")
+
+        # # Step 6: Transformer projections
+        # try:
+        #     print(f"  Step 6: Transformer projections...")
+        #     transformer_context = self.in_proj_context(self.do(self.norm(input_embedding)))
+        #     transformer_input = self.in_proj(self.do(self.norm_cxt(input_embedding_fut)))
+        #     print(f"    ✅ transformer_context shape: {transformer_context.shape if hasattr(transformer_context, 'shape') else 'jagged'}")
+        #     print(f"    ✅ transformer_input shape: {transformer_input.shape if hasattr(transformer_input, 'shape') else 'jagged'}")
+        # except Exception as e:
+        #     print(f"    ❌ Transformer projections失败: {e}")
+        #     raise e
+
+        # # Step 7: Transformer forward
+        # try:
+        #     print(f"  Step 7: Transformer forward...")
+        #     if self.jagged_mode:
+        #         transformer_output = self.transformer(x=transformer_input, context=transformer_context, padding_mask=batch.seq_mask, jagged=self.jagged_mode)
+        #     else:
+        #         causal_mask = nn.Transformer.generate_square_subsequent_mask(transformer_input.shape[1], device=transformer_input.device)
+        #         print(f"    causal_mask shape: {causal_mask.shape}")
+        #         transformer_output = self.transformer(src=transformer_context, tgt=transformer_input, tgt_is_causal=True, tgt_mask=causal_mask, src_key_padding_mask=f_mask, memory_key_padding_mask=f_mask)
+            
+        #     print(f"    ✅ transformer_output shape: {transformer_output.shape if hasattr(transformer_output, 'shape') else 'jagged'}")
+        #     print(f"  🎉 _predict方法成功完成!")
+        #     return transformer_output
+            
+        # except Exception as e:
+        #     print(f"    ❌ Transformer forward失败: {e}")
+        #     print(f"    错误类型: {type(e).__name__}")
+        #     if "illegal memory access" in str(e):
+        #         print(f"    💥 这是CUDA内存访问错误!")
+        #         # 打印所有相关tensor的详细信息
+        #         print(f"    调试信息:")
+        #         if not self.jagged_mode:
+        #             print(f"      transformer_context shape: {transformer_context.shape}")
+        #             print(f"      transformer_input shape: {transformer_input.shape}")
+        #             print(f"      causal_mask shape: {causal_mask.shape}")
+        #             print(f"      f_mask shape: {f_mask.shape}")
+        #             print(f"      f_mask inf count: {torch.isinf(f_mask).sum()}")
+        #     raise e
 
     @eval_mode
     @reset_encoder_cache

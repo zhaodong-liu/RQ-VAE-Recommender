@@ -128,6 +128,7 @@ class SemanticIdTokenizer(nn.Module):
         # TODO: Handle output inconstency in If-else.
         # If block has to return 3-sized ids for use in precompute_corpus_ids
         # Else block has to return deduped 4-sized ids for use in decoder training.
+        
         if self.cached_ids is None or batch.ids.max() >= self.cached_ids.shape[0]:
             B, N = batch.ids.shape
             sem_ids = self.rq_vae.get_semantic_ids(batch.x).sem_ids
@@ -138,6 +139,20 @@ class SemanticIdTokenizer(nn.Module):
             sem_ids = torch.clamp(sem_ids, 0, self.codebook_size - 1)
             
         else:
+            MAX_SEQ_LEN = 50
+            
+            if batch.ids.shape[1] > MAX_SEQ_LEN:
+                print(f"截断序列长度: {batch.ids.shape[1]} → {MAX_SEQ_LEN}")
+                # 创建新的batch对象，因为NamedTuple是不可变的
+                batch = SeqBatch(
+                    user_ids=batch.user_ids,
+                    ids=batch.ids[:, -MAX_SEQ_LEN:],
+                    ids_fut=batch.ids_fut,  # 这个不需要截断，只有1个元素
+                    x=batch.x[:, -MAX_SEQ_LEN:],
+                    x_fut=batch.x_fut,      # 这个不需要截断，只有1个元素
+                    seq_mask=batch.seq_mask[:, -MAX_SEQ_LEN:]
+                )
+
             B, N = batch.ids.shape
             _, D = self.cached_ids.shape
             sem_ids = self._tokenize_seq_batch_from_cached(batch.ids)
@@ -159,6 +174,15 @@ class SemanticIdTokenizer(nn.Module):
         
         token_type_ids = torch.arange(D, device=sem_ids.device).repeat(B, N)
         token_type_ids_fut = torch.arange(D, device=sem_ids.device).repeat(B, 1)
+
+        if sem_ids.max() >= self.codebook_size:
+            print(f"❌ CRITICAL: sem_ids.max()={sem_ids.max()} >= codebook_size={self.codebook_size}")
+            sem_ids = torch.clamp(sem_ids, -1, self.codebook_size - 1)
+        
+        if sem_ids_fut is not None and sem_ids_fut.max() >= self.codebook_size:
+            print(f"❌ CRITICAL: sem_ids_fut.max()={sem_ids_fut.max()} >= codebook_size={self.codebook_size}")
+            sem_ids_fut = torch.clamp(sem_ids_fut, -1, self.codebook_size - 1)
+
         return TokenizedSeqBatch(
             user_ids=batch.user_ids,
             sem_ids=sem_ids,

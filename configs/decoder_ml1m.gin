@@ -1,9 +1,9 @@
 import data.processed
 
 # 调试配置 - 禁用编译和优化
-train.iterations=10               # 极少迭代数用于调试
-train.batch_size=4               # 极小batch size
-train.learning_rate=0.001
+train.iterations=10000               # 极少迭代数用于调试
+train.batch_size=512               # 极小batch size
+train.learning_rate=0.0001
 train.weight_decay=0.01
 
 # VAE配置

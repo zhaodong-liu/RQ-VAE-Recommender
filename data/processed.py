@@ -31,8 +31,8 @@ DATASET_NAME_TO_RAW_DATASET = {
 
 DATASET_NAME_TO_MAX_SEQ_LEN = {
     RecDataset.AMAZON: 20,
-    RecDataset.ML_1M: 200,
-    RecDataset.ML_32M: 200
+    RecDataset.ML_1M: 20,
+    RecDataset.ML_32M: 50
 }
 
 
