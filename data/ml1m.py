@@ -44,7 +44,6 @@ class RawMovieLens1M(MovieLens1M, PreprocessingMixin):
         Amazon-style sequence splitting: each user sequence is split into train/eval/test
         based on fixed positions rather than time-based global split
         """
-        print("   使用Amazon风格的序列分割...")
         splits = ["train", "eval", "test"]
         sequences = {sp: defaultdict(list) for sp in splits}
         
@@ -73,7 +72,6 @@ class RawMovieLens1M(MovieLens1M, PreprocessingMixin):
         print(f"   有效用户序列数: {len(user_sequences):,}")
         
         # Split each user sequence (Amazon style)
-        print("   执行Amazon风格分割...")
         for i, seq_data in enumerate(user_sequences):
             if i % 500 == 0:  # ML-1M序列较少，减少进度输出频率
                 print(f"   分割进度: {i:,}/{len(user_sequences):,} ({i/len(user_sequences)*100:.1f}%)")
@@ -125,7 +123,7 @@ class RawMovieLens1M(MovieLens1M, PreprocessingMixin):
         print(f"   测试序列数: {len(sequences['test']['userId']):,}")
         
         # Convert to polars DataFrames (exactly like Amazon and ML-32M)
-        print("   转换为polars DataFrame...")
+        # print("   转换为polars DataFrame...")
         import polars as pl
         for sp in splits:
             if sequences[sp]["userId"]:  # Only create if not empty
@@ -143,20 +141,16 @@ class RawMovieLens1M(MovieLens1M, PreprocessingMixin):
         return sequences
     
     def process(self, max_seq_len=200) -> None:
-        print("=" * 60)
-        print("开始处理ML-1M数据集 (Amazon格式)")
-        print("=" * 60)
         
         data = HeteroData()
         
-        print("1. 加载评分数据...")
+        # print("1. 加载评分数据...")
         ratings_df = self._load_ratings()
-        print(f"   原始评分数: {len(ratings_df):,}")
-        print(f"   用户数: {ratings_df['userId'].nunique():,}")
-        print(f"   电影数: {ratings_df['movieId'].nunique():,}")
+        # print(f"   原始评分数: {len(ratings_df):,}")
+        # print(f"   用户数: {ratings_df['userId'].nunique():,}")
+        # print(f"   电影数: {ratings_df['movieId'].nunique():,}")
 
-        print("\n2. 处理电影数据...")
-        # Process movie data (Amazon-style)
+        # print("\n2. 处理电影数据...")
         full_df = pd.read_csv(
             self.raw_paths[0],
             sep='::',
@@ -166,16 +160,15 @@ class RawMovieLens1M(MovieLens1M, PreprocessingMixin):
             encoding='ISO-8859-1',
             engine='python',
         )
-        print(f"   原始电影数: {len(full_df):,}")
+        # print(f"   原始电影数: {len(full_df):,}")
         
         # Remove low occurrence movies
-        print("   移除低频电影...")
+        # print("   移除低频电影...")
         df = self._remove_low_occurrence(ratings_df, full_df, "movieId")
-        print(f"   过滤后电影数: {len(df):,}")
+        # print(f"   过滤后电影数: {len(df):,}")
         movie_mapping = {idx: i for i, idx in enumerate(df.index)}
 
         # Process titles and create Amazon-style text descriptions
-        print("   创建Amazon风格文本描述...")
         titles_text = df["title"].apply(lambda s: s.split("(")[0].strip()).tolist()
         
         # Create Amazon-style text descriptions (exactly like Amazon and ML-32M)
@@ -183,12 +176,12 @@ class RawMovieLens1M(MovieLens1M, PreprocessingMixin):
             lambda row: f"Title: {row['title'].split('(')[0].strip()}; Genres: {row['genres']};",
             axis=1
         ).tolist()
-        print(f"   示例文本: {sentences[0]}")
+
         
         # Create embeddings (Amazon-style: only text embeddings)
-        print("   生成文本嵌入 (这可能需要几分钟)...")
+        # print("   生成文本嵌入 (这可能需要几分钟)...")
         titles_emb = self._encode_text_feature(sentences)
-        print(f"   文本嵌入形状: {titles_emb.shape}")
+        # print(f"   文本嵌入形状: {titles_emb.shape}")
         
         # Store item features (Amazon-style format - exactly the same)
         data['item'].x = titles_emb
@@ -200,10 +193,9 @@ class RawMovieLens1M(MovieLens1M, PreprocessingMixin):
         data['item'].is_train = torch.rand(titles_emb.shape[0], generator=gen) > 0.05
         train_items = data['item'].is_train.sum().item()
         test_items = (~data['item'].is_train).sum().item()
-        print(f"   物品分割: {train_items:,} 训练, {test_items:,} 测试")
+        # print(f"   物品分割: {train_items:,} 训练, {test_items:,} 测试")
 
-        print("\n3. 处理用户数据...")
-        # Process user data for mapping only
+        # print("\n3. 处理用户数据...")
         user_df = pd.read_csv(
             self.raw_paths[1],
             sep='::',
@@ -214,38 +206,37 @@ class RawMovieLens1M(MovieLens1M, PreprocessingMixin):
             encoding='ISO-8859-1',
             engine='python',
         )
-        print(f"   原始用户数: {len(user_df):,}")
+        # print(f"   原始用户数: {len(user_df):,}")
         user_df = self._remove_low_occurrence(ratings_df, user_df, "userId")
-        print(f"   过滤后用户数: {len(user_df):,}")
+        # print(f"   过滤后用户数: {len(user_df):,}")
         user_mapping = {idx: i for i, idx in enumerate(user_df.index)}
 
-        print("\n4. 处理评分数据...")
+        # print("\n4. 处理评分数据...")
         # Process rating data for sequence generation only
         filtered_ratings = self._remove_low_occurrence(
             ratings_df,
             ratings_df,
             ["userId", "movieId"]
         )
-        print(f"   过滤后评分数: {len(filtered_ratings):,}")
+        # print(f"   过滤后评分数: {len(filtered_ratings):,}")
         
-        print("\n5. 创建Amazon风格序列历史...")
         # Use Amazon-style sequence splitting (same as ML-32M)
         sequences = self.amazon_style_train_test_split(
             filtered_ratings, user_mapping, movie_mapping, max_seq_len
         )
         
-        print("\n6. 转换为张量格式 (Amazon风格)...")
+        # print("\n6. 转换为张量格式 (Amazon风格)...")
         # Convert to tensor format (exactly like Amazon and ML-32M)
         history = {}
         for split_name, split_data in sequences.items():
-            print(f"   处理{split_name}分割...")
+            # print(f"   处理{split_name}分割...")
             if len(split_data) > 0:
                 history[split_name] = {
                     "userId": torch.tensor(split_data.get_column("userId").to_list()),
                     "itemId": torch.tensor(split_data.get_column("itemId").to_list()),
                     "itemId_fut": torch.tensor(split_data.get_column("itemId_fut").to_list()),
                 }
-                print(f"   {split_name} 张量形状: userId {history[split_name]['userId'].shape}, itemId {history[split_name]['itemId'].shape}")
+                # print(f"   {split_name} 张量形状: userId {history[split_name]['userId'].shape}, itemId {history[split_name]['itemId'].shape}")
             else:
                 # Empty tensors for empty splits
                 history[split_name] = {
@@ -256,21 +247,21 @@ class RawMovieLens1M(MovieLens1M, PreprocessingMixin):
         
         data["user", "rated", "item"].history = history
 
-        print("\n7. 保存数据...")
+        # print("\n7. 保存数据...")
         if self.pre_transform is not None:
             data = self.pre_transform(data)
 
         self.save([data], self.processed_paths[0])
         
-        print("\n" + "=" * 60)
-        print("ML-1M数据集处理完成! (Amazon格式)")
-        print("=" * 60)
-        print("数据集统计:")
-        print(f"  电影总数: {titles_emb.shape[0]:,}")
-        print(f"  训练电影: {train_items:,} ({train_items/titles_emb.shape[0]*100:.1f}%)")
-        print(f"  测试电影: {test_items:,} ({test_items/titles_emb.shape[0]*100:.1f}%)")
-        print(f"  训练序列: {len(history['train']['userId']):,}")
-        print(f"  评估序列: {len(history['eval']['userId']):,}")
-        print(f"  测试序列: {len(history['test']['userId']):,}")
-        print(f"  序列长度: {max_seq_len}")
-        print("=" * 60)
+        # print("\n" + "=" * 60)
+        # print("ML-1M数据集处理完成! (Amazon格式)")
+        # print("=" * 60)
+        # print("数据集统计:")
+        # print(f"  电影总数: {titles_emb.shape[0]:,}")
+        # print(f"  训练电影: {train_items:,} ({train_items/titles_emb.shape[0]*100:.1f}%)")
+        # print(f"  测试电影: {test_items:,} ({test_items/titles_emb.shape[0]*100:.1f}%)")
+        # print(f"  训练序列: {len(history['train']['userId']):,}")
+        # print(f"  评估序列: {len(history['eval']['userId']):,}")
+        # print(f"  测试序列: {len(history['test']['userId']):,}")
+        # print(f"  序列长度: {max_seq_len}")
+        # print("=" * 60)

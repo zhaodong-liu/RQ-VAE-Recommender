@@ -375,29 +375,29 @@ def train(
                     data = batch_to(first_batch, device)
                     tokenized_data = tokenizer(data)
                     
-                    print(f"📊 第一个evaluation batch信息:")
-                    print(f"  batch size: {data.user_ids.shape[0]}")
-                    print(f"  sem_ids shape: {tokenized_data.sem_ids.shape}")
-                    print(f"  sem_ids range: [{tokenized_data.sem_ids.min()}, {tokenized_data.sem_ids.max()}]")
-                    print(f"  sem_ids_fut range: [{tokenized_data.sem_ids_fut.min()}, {tokenized_data.sem_ids_fut.max()}]")
-                    print(f"  token_type_ids range: [{tokenized_data.token_type_ids.min()}, {tokenized_data.token_type_ids.max()}]")
+                    # print(f"📊 第一个evaluation batch信息:")
+                    # print(f"  batch size: {data.user_ids.shape[0]}")
+                    # print(f"  sem_ids shape: {tokenized_data.sem_ids.shape}")
+                    # print(f"  sem_ids range: [{tokenized_data.sem_ids.min()}, {tokenized_data.sem_ids.max()}]")
+                    # print(f"  sem_ids_fut range: [{tokenized_data.sem_ids_fut.min()}, {tokenized_data.sem_ids_fut.max()}]")
+                    # print(f"  token_type_ids range: [{tokenized_data.token_type_ids.min()}, {tokenized_data.token_type_ids.max()}]")
                     
                     # 执行逐步调试
                     success = debug_generation_step_by_step(model, tokenized_data)
                     
                     if success:
-                        print(f"\n✅ 基础测试通过，尝试完整generation...")
+                        # print(f"\n✅ 基础测试通过，尝试完整generation...")
                         try:
                             model.enable_generation = True
                             generated = model.generate_next_sem_id(tokenized_data, top_k=True, temperature=1)
-                            print(f"🎉 完整generation成功!")
+                            # print(f"🎉 完整generation成功!")
                             
                             if generated is not None:
                                 actual, top_k = tokenized_data.sem_ids_fut, generated.sem_ids
                                 metrics_accumulator.accumulate(actual=actual, top_k=top_k)
                                 
                                 # 如果第一个batch成功，尝试更多batch
-                                print(f"\n🚀 第一个batch成功，继续evaluation更多batch...")
+                                # print(f"\n🚀 第一个batch成功，继续evaluation更多batch...")
                                 successful_batches = 1
                                 total_batches = 1
                                 
@@ -407,7 +407,7 @@ def train(
                                     for batch_idx, batch in enumerate(pbar_eval):
                                         # 限制evaluation数量
                                         if batch_idx >= 19:  # 总共20个batch (包括第一个)
-                                            print(f"达到evaluation batch限制")
+                                            # print(f"达到evaluation batch限制")
                                             break
                                         
                                         try:
@@ -416,7 +416,7 @@ def train(
                                             
                                             # 快速检查
                                             if tokenized_data.sem_ids.max() >= model.num_embeddings:
-                                                print(f"跳过batch {batch_idx+1}: sem_ids越界")
+                                                # print(f"跳过batch {batch_idx+1}: sem_ids越界")
                                                 continue
                                             
                                             generated = model.generate_next_sem_id(tokenized_data, top_k=True, temperature=1)
@@ -439,7 +439,7 @@ def train(
                                             print(f"❌ batch {batch_idx+1} 意外错误: {e}")
                                             continue
                                 
-                                print(f"\nEvaluation完成: {successful_batches}/{total_batches} 成功")
+                                # print(f"\nEvaluation完成: {successful_batches}/{total_batches} 成功")
                                 
                                 if successful_batches > 0:
                                     eval_metrics = metrics_accumulator.reduce()

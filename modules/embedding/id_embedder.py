@@ -69,15 +69,15 @@ class SemIdEmbedder(nn.Module):
     #     ) 
 
     def forward(self, batch: TokenizedSeqBatch) -> SemIdEmbeddingBatch:
-        print(f"\n🔍 SemIdEmbedder调试:")
-        print(f"  self.num_embeddings: {self.num_embeddings}")
-        print(f"  self.sem_ids_dim: {self.sem_ids_dim}")
-        print(f"  self.padding_idx: {self.padding_idx}")
+        # print(f"\n🔍 SemIdEmbedder调试:")
+        # print(f"  self.num_embeddings: {self.num_embeddings}")
+        # print(f"  self.sem_ids_dim: {self.sem_ids_dim}")
+        # print(f"  self.padding_idx: {self.padding_idx}")
         
         # 详细检查每个输入tensor
-        print(f"  输入检查:")
-        print(f"    sem_ids: shape={batch.sem_ids.shape}, range=[{batch.sem_ids.min()}, {batch.sem_ids.max()}]")
-        print(f"    token_type_ids: shape={batch.token_type_ids.shape}, range=[{batch.token_type_ids.min()}, {batch.token_type_ids.max()}]")
+        # print(f"  输入检查:")
+        # print(f"    sem_ids: shape={batch.sem_ids.shape}, range=[{batch.sem_ids.min()}, {batch.sem_ids.max()}]")
+        # print(f"    token_type_ids: shape={batch.token_type_ids.shape}, range=[{batch.token_type_ids.min()}, {batch.token_type_ids.max()}]")
         
         # 检查边界条件
         invalid_sem_ids = (batch.sem_ids >= self.num_embeddings) & (batch.sem_ids != -1)
@@ -96,9 +96,9 @@ class SemIdEmbedder(nn.Module):
         
         # 检查计算后的索引
         max_valid_idx = self.num_embeddings * self.sem_ids_dim - 1
-        print(f"  计算后的索引:")
-        print(f"    sem_ids range: [{sem_ids.min()}, {sem_ids.max()}]")
-        print(f"    max_valid_idx: {max_valid_idx}")
+        # print(f"  计算后的索引:")
+        # print(f"    sem_ids range: [{sem_ids.min()}, {sem_ids.max()}]")
+        # print(f"    max_valid_idx: {max_valid_idx}")
         
         # 检查最终索引是否越界
         final_invalid = (sem_ids > max_valid_idx) | (sem_ids < 0)
@@ -116,9 +116,9 @@ class SemIdEmbedder(nn.Module):
         # 处理future数据
         sem_ids_fut = None
         if batch.sem_ids_fut is not None:
-            print(f"  处理future数据:")
-            print(f"    sem_ids_fut: shape={batch.sem_ids_fut.shape}, range=[{batch.sem_ids_fut.min()}, {batch.sem_ids_fut.max()}]")
-            print(f"    token_type_ids_fut: shape={batch.token_type_ids_fut.shape}, range=[{batch.token_type_ids_fut.min()}, {batch.token_type_ids_fut.max()}]")
+            # print(f"  处理future数据:")
+            # print(f"    sem_ids_fut: shape={batch.sem_ids_fut.shape}, range=[{batch.sem_ids_fut.min()}, {batch.sem_ids_fut.max()}]")
+            # print(f"    token_type_ids_fut: shape={batch.token_type_ids_fut.shape}, range=[{batch.token_type_ids_fut.min()}, {batch.token_type_ids_fut.max()}]")
             
             # 同样的检查和修复流程
             invalid_fut_sem = (batch.sem_ids_fut >= self.num_embeddings) & (batch.sem_ids_fut != -1)
@@ -132,7 +132,7 @@ class SemIdEmbedder(nn.Module):
             token_type_ids_fut_clamped = torch.clamp(batch.token_type_ids_fut, 0, self.sem_ids_dim - 1)
             sem_ids_fut_computed = token_type_ids_fut_clamped * self.num_embeddings + batch.sem_ids_fut
             
-            print(f"    计算后sem_ids_fut range: [{sem_ids_fut_computed.min()}, {sem_ids_fut_computed.max()}]")
+            # print(f"    计算后sem_ids_fut range: [{sem_ids_fut_computed.min()}, {sem_ids_fut_computed.max()}]")
             
             fut_final_invalid = (sem_ids_fut_computed > max_valid_idx) | (sem_ids_fut_computed < 0)
             fut_final_invalid = fut_final_invalid & (batch.sem_ids_fut != -1)
@@ -144,16 +144,16 @@ class SemIdEmbedder(nn.Module):
             
             try:
                 sem_ids_fut = self.emb(sem_ids_fut_computed)
-                print(f"    ✅ future embedding成功")
+                # print(f"    ✅ future embedding成功")
             except Exception as e:
                 print(f"    ❌ future embedding失败: {e}")
                 raise e
 
         # 主要的embedding查找
         try:
-            print(f"  执行主embedding查找...")
+            # print(f"  执行主embedding查找...")
             seq_emb = self.emb(sem_ids)
-            print(f"    ✅ 主embedding成功, shape: {seq_emb.shape}")
+            # print(f"    ✅ 主embedding成功, shape: {seq_emb.shape}")
         except Exception as e:
             print(f"    ❌ 主embedding失败: {e}")
             print(f"    sem_ids详细信息: min={sem_ids.min()}, max={sem_ids.max()}, shape={sem_ids.shape}")

@@ -2,8 +2,8 @@
 #SBATCH --output=jobs/Job.%j.out
 #SBATCH --error=jobs/Job.%j.err
 #SBATCH --cpus-per-task=32
-#SBATCH --mem=32GB
-#SBATCH --time=12:00:00
+#SBATCH --mem=64GB
+#SBATCH --time=18:00:00
 #SBATCH --gres=gpu:1      
 #SBATCH --mail-type=ALL          
 #SBATCH --mail-user=zl4789@nyu.edu

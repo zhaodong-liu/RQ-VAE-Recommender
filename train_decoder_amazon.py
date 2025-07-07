@@ -24,6 +24,11 @@ from torch.utils.data import DataLoader
 from torch.utils.data import RandomSampler
 from tqdm import tqdm
 
+
+from torch.nn import functional as F
+from data.schemas import TokenizedSeqBatch
+from data.schemas import SeqBatch
+
 def debug_generation_step_by_step(model, tokenized_data):
     """一步步调试generation过程"""
     print(f"\n🧪 开始逐步调试generation...")
@@ -215,11 +220,11 @@ def train(
         split=dataset_split
     )
 
-    print(f"\n" + "="*60)
-    print("Amazon数据集信息分析")
-    print("="*60)
-    analyze_amazon_dataset_info(item_dataset, train_dataset, eval_dataset)
-    print("="*60)
+    # print(f"\n" + "="*60)
+    # print("Amazon数据集信息分析")
+    # print("="*60)
+    # analyze_amazon_dataset_info(item_dataset, train_dataset, eval_dataset)
+    # print("="*60)
 
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     
@@ -244,17 +249,17 @@ def train(
     tokenizer = accelerator.prepare(tokenizer)
     tokenizer.precompute_corpus_ids(item_dataset)
 
-    print(f"\n📊 Amazon预计算corpus检查:")
-    print(f"corpus形状: {tokenizer.cached_ids.shape}")
-    print(f"corpus语义ID范围: [{tokenizer.cached_ids[:, :-1].min()}, {tokenizer.cached_ids[:, :-1].max()}]")
-    print(f"去重维度范围: [{tokenizer.cached_ids[:, -1].min()}, {tokenizer.cached_ids[:, -1].max()}]")
+    # print(f"\n📊 Amazon预计算corpus检查:")
+    # print(f"corpus形状: {tokenizer.cached_ids.shape}")
+    # print(f"corpus语义ID范围: [{tokenizer.cached_ids[:, :-1].min()}, {tokenizer.cached_ids[:, :-1].max()}]")
+    # print(f"去重维度范围: [{tokenizer.cached_ids[:, -1].min()}, {tokenizer.cached_ids[:, -1].max()}]")
 
     # 检查是否有超出codebook_size的值
     for i in range(tokenizer.cached_ids.shape[1] - 1):  # 检查前3层
         layer_data = tokenizer.cached_ids[:, i]
         layer_max = layer_data.max().item()
         layer_min = layer_data.min().item()
-        print(f"第{i}层语义ID范围: [{layer_min}, {layer_max}]")
+        # print(f"第{i}层语义ID范围: [{layer_min}, {layer_max}]")
         if layer_max >= vae_codebook_size:
             print(f"❌ 第{i}层语义ID超出范围: max={layer_max} >= codebook_size={vae_codebook_size}")
             over_count = (layer_data >= vae_codebook_size).sum().item()
@@ -384,12 +389,12 @@ def train(
                     if batch_idx == 0:  # 只处理第一个batch
                         data = batch_to(batch, device)
                         
-                        print(f"📊 Amazon第一个evaluation batch信息:")
-                        print(f"  原始batch size: {data.user_ids.shape[0]}")
-                        print(f"  序列长度: {data.ids.shape[1]}")
-                        print(f"  物品ID范围: [{data.ids.min()}, {data.ids.max()}]")
-                        print(f"  future物品ID: [{data.ids_fut.min()}, {data.ids_fut.max()}]")
-                        print(f"  序列mask总和: {data.seq_mask.sum()}")
+                        # print(f"📊 Amazon第一个evaluation batch信息:")
+                        # print(f"  原始batch size: {data.user_ids.shape[0]}")
+                        # print(f"  序列长度: {data.ids.shape[1]}")
+                        # print(f"  物品ID范围: [{data.ids.min()}, {data.ids.max()}]")
+                        # print(f"  future物品ID: [{data.ids_fut.min()}, {data.ids_fut.max()}]")
+                        # print(f"  序列mask总和: {data.seq_mask.sum()}")
                         
                         # 创建更小的测试batch（Amazon数据可能batch size更大）
                         test_batch_size = min(4, data.user_ids.shape[0])  # 最多4个样本
@@ -404,13 +409,13 @@ def train(
                         
                         tokenized_data = tokenizer(small_data)
                         
-                        print(f"📊 Amazon tokenized数据信息:")
-                        print(f"  测试batch size: {test_batch_size}")
-                        print(f"  sem_ids shape: {tokenized_data.sem_ids.shape}")
-                        print(f"  sem_ids range: [{tokenized_data.sem_ids.min()}, {tokenized_data.sem_ids.max()}]")
-                        print(f"  sem_ids_fut range: [{tokenized_data.sem_ids_fut.min()}, {tokenized_data.sem_ids_fut.max()}]")
-                        print(f"  token_type_ids range: [{tokenized_data.token_type_ids.min()}, {tokenized_data.token_type_ids.max()}]")
-                        print(f"  seq_mask sum: {tokenized_data.seq_mask.sum()}")
+                        # print(f"📊 Amazon tokenized数据信息:")
+                        # print(f"  测试batch size: {test_batch_size}")
+                        # print(f"  sem_ids shape: {tokenized_data.sem_ids.shape}")
+                        # print(f"  sem_ids range: [{tokenized_data.sem_ids.min()}, {tokenized_data.sem_ids.max()}]")
+                        # print(f"  sem_ids_fut range: [{tokenized_data.sem_ids_fut.min()}, {tokenized_data.sem_ids_fut.max()}]")
+                        # print(f"  token_type_ids range: [{tokenized_data.token_type_ids.min()}, {tokenized_data.token_type_ids.max()}]")
+                        # print(f"  seq_mask sum: {tokenized_data.seq_mask.sum()}")
                         
                         # 检查数据完整性
                         if tokenized_data.sem_ids.max() >= model.num_embeddings:
@@ -425,19 +430,19 @@ def train(
                         success = debug_generation_step_by_step(model, tokenized_data)
                         
                         if success:
-                            print(f"\n✅ Amazon基础测试通过，尝试完整generation...")
+                            # print(f"\n✅ Amazon基础测试通过，尝试完整generation...")
                             try:
                                 model.enable_generation = True
                                 # 使用更保守的参数
-                                generated = model.generate_next_sem_id(tokenized_data, top_k=False, temperature=1)  # 禁用top_k
-                                print(f"🎉 Amazon完整generation成功!")
+                                generated = model.generate_next_sem_id(tokenized_data, top_k=True, temperature=1)  # 禁用top_k
+                                # print(f"🎉 Amazon完整generation成功!")
                                 
                                 if generated is not None:
                                     actual, top_k = tokenized_data.sem_ids_fut, generated.sem_ids
                                     metrics_accumulator.accumulate(actual=actual, top_k=top_k)
                                     
                                     # 如果成功，尝试更多batch但限制数量
-                                    print(f"\n🚀 第一个batch成功，继续evaluation更多Amazon batch...")
+                                    # print(f"\n🚀 第一个batch成功，继续evaluation更多Amazon batch...")
                                     successful_batches = 1
                                     total_batches = 1
                                     
@@ -488,7 +493,7 @@ def train(
                                             print(f"❌ Amazon batch {eval_batch_idx+1} 意外错误: {e}")
                                             continue
                                     
-                                    print(f"\nAmazon Evaluation完成: {successful_batches}/{total_batches} 成功")
+                                    # print(f"\nAmazon Evaluation完成: {successful_batches}/{total_batches} 成功")
                                     
                                     if successful_batches > 0:
                                         eval_metrics = metrics_accumulator.reduce()

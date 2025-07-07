@@ -139,19 +139,19 @@ class SemanticIdTokenizer(nn.Module):
             sem_ids = torch.clamp(sem_ids, 0, self.codebook_size - 1)
             
         else:
-            MAX_SEQ_LEN = 50
+            # MAX_SEQ_LEN = 50
             
-            if batch.ids.shape[1] > MAX_SEQ_LEN:
-                print(f"截断序列长度: {batch.ids.shape[1]} → {MAX_SEQ_LEN}")
-                # 创建新的batch对象，因为NamedTuple是不可变的
-                batch = SeqBatch(
-                    user_ids=batch.user_ids,
-                    ids=batch.ids[:, -MAX_SEQ_LEN:],
-                    ids_fut=batch.ids_fut,  # 这个不需要截断，只有1个元素
-                    x=batch.x[:, -MAX_SEQ_LEN:],
-                    x_fut=batch.x_fut,      # 这个不需要截断，只有1个元素
-                    seq_mask=batch.seq_mask[:, -MAX_SEQ_LEN:]
-                )
+            # if batch.ids.shape[1] > MAX_SEQ_LEN:
+            #     # print(f"截断序列长度: {batch.ids.shape[1]} → {MAX_SEQ_LEN}")
+            #     # 创建新的batch对象，因为NamedTuple是不可变的
+            #     batch = SeqBatch(
+            #         user_ids=batch.user_ids,
+            #         ids=batch.ids[:, -MAX_SEQ_LEN:],
+            #         ids_fut=batch.ids_fut,  # 这个不需要截断，只有1个元素
+            #         x=batch.x[:, -MAX_SEQ_LEN:],
+            #         x_fut=batch.x_fut,      # 这个不需要截断，只有1个元素
+            #         seq_mask=batch.seq_mask[:, -MAX_SEQ_LEN:]
+            #     )
 
             B, N = batch.ids.shape
             _, D = self.cached_ids.shape
