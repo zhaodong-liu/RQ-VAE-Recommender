@@ -11,7 +11,10 @@ from data.processed import SeqData
 from data.utils import batch_to
 from data.utils import cycle
 from data.utils import next_batch
-from evaluate.metrics import TopKAccumulator
+# from evaluate.metrics import TopKAccumulator
+
+from evaluate.enhanced_metrics import EnhancedMetricsAccumulator as TopKAccumulator
+
 from modules.model import EncoderDecoderRetrievalModel
 from modules.scheduler.inv_sqrt import InverseSquareRootScheduler
 from modules.tokenizer.semids import SemanticIdTokenizer
@@ -381,147 +384,229 @@ def train(
             #     metrics_accumulator.reset()
 
             if (iter+1) % full_eval_every == 0:
-                print(f"\n🔧 开始Amazon generation evaluation调试 (iteration {iter+1})...")
+                print(f"\n🔧 开始Amazon generation evaluation (iteration {iter+1})...")
                 model.eval()
                 
-                # 直接遍历dataloader获取第一个batch
+                # 重置metrics accumulator
+                metrics_accumulator.reset()
+                successful_batches = 0
+                total_batches = 0
+                max_eval_batches = 10  # 限制评估批次数量
+                
+                # 遍历evaluation dataloader
                 for batch_idx, batch in enumerate(eval_dataloader):
-                    if batch_idx == 0:  # 只处理第一个batch
+                    if batch_idx >= max_eval_batches:
+                        break
+                        
+                    try:
                         data = batch_to(batch, device)
                         
-                        # print(f"📊 Amazon第一个evaluation batch信息:")
-                        # print(f"  原始batch size: {data.user_ids.shape[0]}")
-                        # print(f"  序列长度: {data.ids.shape[1]}")
-                        # print(f"  物品ID范围: [{data.ids.min()}, {data.ids.max()}]")
-                        # print(f"  future物品ID: [{data.ids_fut.min()}, {data.ids_fut.max()}]")
-                        # print(f"  序列mask总和: {data.seq_mask.sum()}")
-                        
-                        # 创建更小的测试batch（Amazon数据可能batch size更大）
-                        test_batch_size = min(4, data.user_ids.shape[0])  # 最多4个样本
+                        # 对于Amazon数据集，限制batch size以避免内存问题
+                        test_batch_size = min(4, data.user_ids.shape[0])
                         small_data = SeqBatch(
                             user_ids=data.user_ids[:test_batch_size],
                             ids=data.ids[:test_batch_size],
                             ids_fut=data.ids_fut[:test_batch_size],
-                            x=data.x[:test_batch_size],
-                            x_fut=data.x_fut[:test_batch_size],
-                            seq_mask=data.seq_mask[:test_batch_size]
+                            x=data.x[:test_batch_size] if data.x is not None else None,
+                            x_fut=data.x_fut[:test_batch_size] if data.x_fut is not None else None,
+                            seq_mask=data.seq_mask[:test_batch_size] if data.seq_mask is not None else None
                         )
                         
                         tokenized_data = tokenizer(small_data)
                         
-                        # print(f"📊 Amazon tokenized数据信息:")
-                        # print(f"  测试batch size: {test_batch_size}")
-                        # print(f"  sem_ids shape: {tokenized_data.sem_ids.shape}")
-                        # print(f"  sem_ids range: [{tokenized_data.sem_ids.min()}, {tokenized_data.sem_ids.max()}]")
-                        # print(f"  sem_ids_fut range: [{tokenized_data.sem_ids_fut.min()}, {tokenized_data.sem_ids_fut.max()}]")
-                        # print(f"  token_type_ids range: [{tokenized_data.token_type_ids.min()}, {tokenized_data.token_type_ids.max()}]")
-                        # print(f"  seq_mask sum: {tokenized_data.seq_mask.sum()}")
-                        
                         # 检查数据完整性
                         if tokenized_data.sem_ids.max() >= model.num_embeddings:
-                            print(f"❌ sem_ids越界: {tokenized_data.sem_ids.max()} >= {model.num_embeddings}")
-                            break
+                            print(f"⚠️ Batch {batch_idx+1}: sem_ids越界，跳过")
+                            continue
                         
-                        if tokenized_data.token_type_ids.max() >= model.sem_id_dim:
-                            print(f"❌ token_type_ids越界: {tokenized_data.token_type_ids.max()} >= {model.sem_id_dim}")
-                            break
+                        if hasattr(tokenized_data, 'token_type_ids') and tokenized_data.token_type_ids.max() >= model.sem_id_dim:
+                            print(f"⚠️ Batch {batch_idx+1}: token_type_ids越界，跳过")
+                            continue
                         
-                        # 执行逐步调试
-                        success = debug_generation_step_by_step(model, tokenized_data)
+                        # 第一个batch进行详细调试
+                        if batch_idx == 0:
+                            success = debug_generation_step_by_step(model, tokenized_data)
+                            if not success:
+                                print(f"❌ 基础测试失败，跳过evaluation")
+                                break
                         
-                        if success:
-                            # print(f"\n✅ Amazon基础测试通过，尝试完整generation...")
-                            try:
-                                model.enable_generation = True
-                                # 使用更保守的参数
-                                generated = model.generate_next_sem_id(tokenized_data, top_k=True, temperature=1)  # 禁用top_k
-                                # print(f"🎉 Amazon完整generation成功!")
-                                
-                                if generated is not None:
-                                    actual, top_k = tokenized_data.sem_ids_fut, generated.sem_ids
-                                    metrics_accumulator.accumulate(actual=actual, top_k=top_k)
-                                    
-                                    # 如果成功，尝试更多batch但限制数量
-                                    # print(f"\n🚀 第一个batch成功，继续evaluation更多Amazon batch...")
-                                    successful_batches = 1
-                                    total_batches = 1
-                                    
-                                    continue_eval = True
-                                    for eval_batch_idx, eval_batch in enumerate(eval_dataloader):
-                                        if eval_batch_idx >= 9:  # 最多10个batch
-                                            break
-                                        if eval_batch_idx == 0:  # 跳过第一个，已经处理过
-                                            continue
-                                            
-                                        try:
-                                            eval_data = batch_to(eval_batch, device)
-                                            # 同样限制batch size
-                                            limited_batch_size = min(4, eval_data.user_ids.shape[0])
-                                            limited_data = SeqBatch(
-                                                user_ids=eval_data.user_ids[:limited_batch_size],
-                                                ids=eval_data.ids[:limited_batch_size],
-                                                ids_fut=eval_data.ids_fut[:limited_batch_size],
-                                                x=eval_data.x[:limited_batch_size],
-                                                x_fut=eval_data.x_fut[:limited_batch_size],
-                                                seq_mask=eval_data.seq_mask[:limited_batch_size]
-                                            )
-                                            
-                                            eval_tokenized = tokenizer(limited_data)
-                                            
-                                            # 快速检查
-                                            if eval_tokenized.sem_ids.max() >= model.num_embeddings:
-                                                print(f"跳过batch {eval_batch_idx+1}: sem_ids越界")
-                                                continue
-                                            
-                                            eval_generated = model.generate_next_sem_id(eval_tokenized, top_k=False, temperature=1)
-                                            
-                                            if eval_generated is not None:
-                                                eval_actual, eval_top_k = eval_tokenized.sem_ids_fut, eval_generated.sem_ids
-                                                metrics_accumulator.accumulate(actual=eval_actual, top_k=eval_top_k)
-                                                successful_batches += 1
-                                            
-                                            total_batches += 1
-                                            
-                                        except RuntimeError as e:
-                                            if "illegal memory access" in str(e):
-                                                print(f"❌ Amazon batch {eval_batch_idx+1} CUDA错误，停止evaluation")
-                                                break
-                                            else:
-                                                print(f"❌ Amazon batch {eval_batch_idx+1} 其他错误: {e}")
-                                                break
-                                        except Exception as e:
-                                            print(f"❌ Amazon batch {eval_batch_idx+1} 意外错误: {e}")
-                                            continue
-                                    
-                                    # print(f"\nAmazon Evaluation完成: {successful_batches}/{total_batches} 成功")
-                                    
-                                    if successful_batches > 0:
-                                        eval_metrics = metrics_accumulator.reduce()
-                                        print(f"Amazon评估结果: {eval_metrics}")
-                                        if accelerator.is_main_process and wandb_logging:
-                                            wandb.log(eval_metrics)
-                                else:
-                                    print(f"⚠️ Amazon generation返回None")
-                                    
-                            except RuntimeError as e:
-                                if "illegal memory access" in str(e):
-                                    print(f"❌ Amazon完整generation出现CUDA错误:")
-                                    print(f"   错误信息: {e}")
-                                    print(f"   这个错误需要进一步调试...")
-                                else:
-                                    print(f"❌ Amazon完整generation出现其他错误: {e}")
-                                    raise e
-                            except Exception as e:
-                                print(f"❌ Amazon完整generation出现意外错误: {e}")
-                                import traceback
-                                traceback.print_exc()
-                        else:
-                            print(f"❌ Amazon基础测试失败，无法进行generation")
+                        # 执行generation
+                        model.enable_generation = True
+                        generated = model.generate_next_sem_id(tokenized_data, top_k=True, temperature=1.0)
+                        
+                        if generated is not None and generated.sem_ids is not None:
+                            actual = tokenized_data.sem_ids_fut
+                            top_k = generated.sem_ids
                             
-                        break  # 只处理第一个batch
+                            # 累积指标
+                            metrics_accumulator.accumulate(actual=actual, top_k=top_k)
+                            successful_batches += 1
+                        
+                        total_batches += 1
+                        
+                    except RuntimeError as e:
+                        if "illegal memory access" in str(e):
+                            print(f"❌ Batch {batch_idx+1}: CUDA错误，停止evaluation")
+                            break
+                        else:
+                            print(f"❌ Batch {batch_idx+1}: Runtime错误 - {str(e)[:100]}")
+                            continue
+                    except Exception as e:
+                        print(f"❌ Batch {batch_idx+1}: 意外错误 - {str(e)[:100]}")
+                        continue
                 
-                # 重置accumulator
+                # 计算和显示指标
+                if successful_batches > 0:
+                    # 计算所有指标
+                    eval_metrics = metrics_accumulator.reduce()
+                    
+                    # 打印原始指标字典（用于调试）
+                    print("\n📊 All Amazon Evaluation Metrics:")
+                    print(eval_metrics)
+                    
+                    # 格式化打印
+                    print("\n" + "="*70)
+                    print(f"🎯 Amazon Evaluation Results - Iteration {iter+1}")
+                    print("="*70)
+                    print(f"Dataset: Amazon {dataset_split}")
+                    print(f"Batches processed: {successful_batches}/{total_batches} (max: {max_eval_batches})")
+                    print("-"*70)
+                    
+                    # 打印 Recall 指标
+                    print("📈 Recall Metrics:")
+                    recall_values = []
+                    for k in [1, 5, 10]:
+                        recall_key = f"recall@{k}"
+                        if recall_key in eval_metrics:
+                            value = eval_metrics[recall_key]
+                            recall_values.append((k, value))
+                            print(f"  Recall@{k:<2}: {value:.4f} ({value*100:.2f}%)")
+                        else:
+                            print(f"  Recall@{k:<2}: N/A")
+                    
+                    print("-"*35)
+                    
+                    # 打印 NDCG 指标
+                    print("📊 NDCG Metrics:")
+                    ndcg_values = []
+                    for k in [1, 5, 10]:
+                        ndcg_key = f"ndcg@{k}"
+                        if ndcg_key in eval_metrics:
+                            value = eval_metrics[ndcg_key]
+                            ndcg_values.append((k, value))
+                            print(f"  NDCG@{k:<2}  : {value:.4f}")
+                        else:
+                            print(f"  NDCG@{k:<2}  : N/A")
+                    
+                    print("-"*35)
+                    
+                    # 打印主要的 Hit 指标（针对Amazon的语义ID长度）
+                    print("🎯 Hit Metrics (Complete Sequence):")
+                    # 找出语义ID的长度
+                    sem_id_length = 4  # Amazon通常是4
+                    for k in [1, 5, 10]:
+                        hit_key = f"h@{k}_slice_:{sem_id_length}"
+                        if hit_key in eval_metrics:
+                            value = eval_metrics[hit_key]
+                            print(f"  Hit@{k:<2}   : {value:.4f} ({value*100:.2f}%)")
+                        elif f"h@{k}_slice_:3" in eval_metrics:  # 如果长度是3
+                            value = eval_metrics[f"h@{k}_slice_:3"]
+                            print(f"  Hit@{k:<2}   : {value:.4f} ({value*100:.2f}%)")
+                    
+                    print("="*70)
+                    
+                    # 显示改进趋势（如果有历史数据）
+                    if hasattr(train, 'prev_recall_10'):
+                        current_recall_10 = eval_metrics.get('recall@10', 0)
+                        improvement = current_recall_10 - train.prev_recall_10
+                        if improvement > 0:
+                            print(f"📈 Improvement: Recall@10 +{improvement:.4f} from last eval")
+                        elif improvement < 0:
+                            print(f"📉 Decline: Recall@10 {improvement:.4f} from last eval")
+                        train.prev_recall_10 = current_recall_10
+                    else:
+                        train.prev_recall_10 = eval_metrics.get('recall@10', 0)
+                    
+                    # 检查是否有新指标
+                    if "recall@5" not in eval_metrics and "ndcg@5" not in eval_metrics:
+                        print("\n⚠️  Warning: NDCG and Recall metrics not found!")
+                        print("   Please verify EnhancedMetricsAccumulator is properly imported")
+                        print(f"   Current accumulator type: {type(metrics_accumulator).__name__}")
+                        print("   Expected: EnhancedMetricsAccumulator or TopKAccumulator")
+                    
+                    # 为wandb准备关键指标
+                    key_metrics = {
+                        "iteration": iter + 1,
+                        "dataset": f"amazon_{dataset_split}",
+                        "eval_batches": successful_batches,
+                    }
+                    
+                    # 添加所有Recall和NDCG指标
+                    for k in [5, 10]:
+                        for metric_type in ['recall', 'ndcg']:
+                            metric_key = f"{metric_type}@{k}"
+                            if metric_key in eval_metrics:
+                                key_metrics[f"amazon_{metric_key}"] = eval_metrics[metric_key]
+                    
+                    # Log to wandb
+                    if accelerator.is_main_process and wandb_logging:
+                        # Log所有指标
+                        wandb.log(eval_metrics)
+                        
+                        # Log关键指标with prefix
+                        wandb.log({f"eval/{k}": v for k, v in key_metrics.items()})
+                        
+                        # 创建summary表格
+                        if "recall@5" in eval_metrics:
+                            summary_data = []
+                            for k in [5, 10]:
+                                summary_data.append([
+                                    f"@{k}",
+                                    f"{eval_metrics.get(f'recall@{k}', 0):.4f}",
+                                    f"{eval_metrics.get(f'ndcg@{k}', 0):.4f}"
+                                ])
+                            
+                            wandb.log({
+                                "amazon_eval_summary": wandb.Table(
+                                    columns=["K", "Recall", "NDCG"],
+                                    data=summary_data
+                                )
+                            })
+                    
+                    # 保存最佳模型（基于Recall@10）
+                    if "recall@10" in eval_metrics:
+                        current_recall_10 = eval_metrics["recall@10"]
+                        
+                        # 初始化或更新最佳分数
+                        if not hasattr(train, 'best_amazon_recall_10'):
+                            train.best_amazon_recall_10 = 0
+                        
+                        if current_recall_10 > train.best_amazon_recall_10:
+                            train.best_amazon_recall_10 = current_recall_10
+                            print(f"\n🏆 New best Amazon Recall@10: {current_recall_10:.4f}")
+                            
+                            # 保存最佳模型
+                            if accelerator.is_main_process:
+                                best_checkpoint = {
+                                    "model": accelerator.unwrap_model(model).state_dict(),
+                                    "optimizer": optimizer.state_dict(),
+                                    "scheduler": lr_scheduler.state_dict(),
+                                    "iter": iter,
+                                    "best_recall_10": current_recall_10,
+                                    "dataset": f"amazon_{dataset_split}",
+                                    "eval_metrics": eval_metrics
+                                }
+                                save_path = f"{save_dir_root}/best_amazon_model.pt"
+                                torch.save(best_checkpoint, save_path)
+                                print(f"💾 Saved best Amazon model: {save_path}")
+                                print(f"   Best Recall@10: {current_recall_10:.4f}")
+                else:
+                    print(f"\n❌ No successful evaluation batches for Amazon dataset")
+                    print(f"   Total attempted: {total_batches}")
+                
+                # 重置accumulator为下次评估做准备
                 metrics_accumulator.reset()
+        
 
             if accelerator.is_main_process:
                 if (iter+1) % save_model_every == 0 or iter+1 == iterations:

@@ -11,7 +11,10 @@ from data.processed import SeqData
 from data.utils import batch_to
 from data.utils import cycle
 from data.utils import next_batch
-from evaluate.metrics import TopKAccumulator
+# from evaluate.metrics import TopKAccumulator
+
+from evaluate.enhanced_metrics import EnhancedMetricsAccumulator as TopKAccumulator
+
 from modules.model import EncoderDecoderRetrievalModel
 from modules.scheduler.inv_sqrt import InverseSquareRootScheduler
 from modules.tokenizer.semids import SemanticIdTokenizer
@@ -375,29 +378,19 @@ def train(
                     data = batch_to(first_batch, device)
                     tokenized_data = tokenizer(data)
                     
-                    # print(f"📊 第一个evaluation batch信息:")
-                    # print(f"  batch size: {data.user_ids.shape[0]}")
-                    # print(f"  sem_ids shape: {tokenized_data.sem_ids.shape}")
-                    # print(f"  sem_ids range: [{tokenized_data.sem_ids.min()}, {tokenized_data.sem_ids.max()}]")
-                    # print(f"  sem_ids_fut range: [{tokenized_data.sem_ids_fut.min()}, {tokenized_data.sem_ids_fut.max()}]")
-                    # print(f"  token_type_ids range: [{tokenized_data.token_type_ids.min()}, {tokenized_data.token_type_ids.max()}]")
-                    
                     # 执行逐步调试
                     success = debug_generation_step_by_step(model, tokenized_data)
                     
                     if success:
-                        # print(f"\n✅ 基础测试通过，尝试完整generation...")
                         try:
                             model.enable_generation = True
                             generated = model.generate_next_sem_id(tokenized_data, top_k=True, temperature=1)
-                            # print(f"🎉 完整generation成功!")
                             
                             if generated is not None:
                                 actual, top_k = tokenized_data.sem_ids_fut, generated.sem_ids
                                 metrics_accumulator.accumulate(actual=actual, top_k=top_k)
                                 
                                 # 如果第一个batch成功，尝试更多batch
-                                # print(f"\n🚀 第一个batch成功，继续evaluation更多batch...")
                                 successful_batches = 1
                                 total_batches = 1
                                 
@@ -407,7 +400,6 @@ def train(
                                     for batch_idx, batch in enumerate(pbar_eval):
                                         # 限制evaluation数量
                                         if batch_idx >= 19:  # 总共20个batch (包括第一个)
-                                            # print(f"达到evaluation batch限制")
                                             break
                                         
                                         try:
@@ -416,7 +408,6 @@ def train(
                                             
                                             # 快速检查
                                             if tokenized_data.sem_ids.max() >= model.num_embeddings:
-                                                # print(f"跳过batch {batch_idx+1}: sem_ids越界")
                                                 continue
                                             
                                             generated = model.generate_next_sem_id(tokenized_data, top_k=True, temperature=1)
@@ -439,13 +430,121 @@ def train(
                                             print(f"❌ batch {batch_idx+1} 意外错误: {e}")
                                             continue
                                 
-                                # print(f"\nEvaluation完成: {successful_batches}/{total_batches} 成功")
-                                
                                 if successful_batches > 0:
+                                    # 计算所有指标
                                     eval_metrics = metrics_accumulator.reduce()
+                                    
+                                    # 打印完整指标字典（用于调试）
+                                    print("\n📊 All Evaluation Metrics:")
                                     print(eval_metrics)
+                                    
+                                    # 格式化打印关键指标
+                                    print("\n" + "="*70)
+                                    print(f"🎯 Evaluation Results - Iteration {iter+1}")
+                                    print("="*70)
+                                    print(f"Batches processed: {successful_batches}/{total_batches}")
+                                    print("-"*70)
+                                    
+                                    # 打印 Recall 指标
+                                    print("📈 Recall Metrics:")
+                                    for k in [1, 5, 10]:
+                                        recall_key = f"recall@{k}"
+                                        if recall_key in eval_metrics:
+                                            print(f"  Recall@{k:<2}: {eval_metrics[recall_key]:.4f} ({eval_metrics[recall_key]*100:.2f}%)")
+                                        else:
+                                            print(f"  Recall@{k:<2}: N/A")
+                                    
+                                    print("-"*35)
+                                    
+                                    # 打印 NDCG 指标
+                                    print("📊 NDCG Metrics:")
+                                    for k in [1, 5, 10]:
+                                        ndcg_key = f"ndcg@{k}"
+                                        if ndcg_key in eval_metrics:
+                                            print(f"  NDCG@{k:<2}  : {eval_metrics[ndcg_key]:.4f}")
+                                        else:
+                                            print(f"  NDCG@{k:<2}  : N/A")
+                                    
+                                    print("-"*35)
+                                    
+                                    # 打印主要的 Hit 指标（选择性显示）
+                                    print("🎯 Hit Metrics (Selected):")
+                                    # 只显示完整序列的 Hit 指标
+                                    for k in [1, 5, 10]:
+                                        hit_key = f"h@{k}_slice_:4"  # 假设语义ID长度为4
+                                        if hit_key in eval_metrics:
+                                            print(f"  Hit@{k:<2}   : {eval_metrics[hit_key]:.4f} ({eval_metrics[hit_key]*100:.2f}%)")
+                                    
+                                    print("="*70)
+                                    
+                                    # 检查新指标是否存在
+                                    if "recall@5" not in eval_metrics and "ndcg@5" not in eval_metrics:
+                                        print("\n⚠️  Warning: NDCG and Recall metrics not found!")
+                                        print("   Please check if EnhancedMetricsAccumulator is properly imported")
+                                        print(f"   Current accumulator type: {type(metrics_accumulator).__name__}")
+                                    
+                                    # 创建一个包含关键指标的简化字典用于 wandb
+                                    key_metrics = {
+                                        "iteration": iter + 1,
+                                        "eval_batches": successful_batches,
+                                    }
+                                    
+                                    # 添加 Recall 和 NDCG 到关键指标
+                                    for k in [5, 10]:
+                                        recall_key = f"recall@{k}"
+                                        ndcg_key = f"ndcg@{k}"
+                                        if recall_key in eval_metrics:
+                                            key_metrics[recall_key] = eval_metrics[recall_key]
+                                        if ndcg_key in eval_metrics:
+                                            key_metrics[ndcg_key] = eval_metrics[ndcg_key]
+                                    
+                                    # 添加主要的 Hit 指标
+                                    for k in [5, 10]:
+                                        hit_key = f"h@{k}_slice_:4"
+                                        if hit_key in eval_metrics:
+                                            key_metrics[f"hit@{k}_full"] = eval_metrics[hit_key]
+                                    
+                                    # Log to wandb
                                     if accelerator.is_main_process and wandb_logging:
+                                        # Log 所有指标
                                         wandb.log(eval_metrics)
+                                        # Log 关键指标（带有特殊前缀以便在 wandb 中更容易找到）
+                                        wandb.log({f"eval/{k}": v for k, v in key_metrics.items()})
+                                        
+                                        # 创建 wandb 表格显示结果
+                                        if "recall@5" in eval_metrics:
+                                            wandb.log({
+                                                "eval_summary": wandb.Table(
+                                                    columns=["Metric", "Value"],
+                                                    data=[
+                                                        ["Recall@5", f"{eval_metrics['recall@5']:.4f}"],
+                                                        ["Recall@10", f"{eval_metrics.get('recall@10', 0):.4f}"],
+                                                        ["NDCG@5", f"{eval_metrics.get('ndcg@5', 0):.4f}"],
+                                                        ["NDCG@10", f"{eval_metrics.get('ndcg@10', 0):.4f}"],
+                                                    ]
+                                                )
+                                            })
+                                    
+                                    # 保存最佳结果（可选）
+                                    if "recall@10" in eval_metrics:
+                                        current_recall_10 = eval_metrics["recall@10"]
+                                        # 如果这是最佳结果，保存模型
+                                        if not hasattr(train, 'best_recall_10') or current_recall_10 > train.best_recall_10:
+                                            train.best_recall_10 = current_recall_10
+                                            print(f"\n🏆 New best Recall@10: {current_recall_10:.4f}")
+                                            # 可以在这里保存最佳模型
+                                            if accelerator.is_main_process:
+                                                best_checkpoint = {
+                                                    "model": accelerator.unwrap_model(model).state_dict(),
+                                                    "optimizer": optimizer.state_dict(),
+                                                    "scheduler": lr_scheduler.state_dict(),
+                                                    "iter": iter,
+                                                    "best_recall_10": current_recall_10,
+                                                    "eval_metrics": eval_metrics
+                                                }
+                                                torch.save(best_checkpoint, f"{save_dir}/best_model.pt")
+                                                print(f"💾 Saved best model with Recall@10: {current_recall_10:.4f}")
+                                
                             else:
                                 print(f"⚠️ generation返回None")
                                 
@@ -469,7 +568,7 @@ def train(
                     import traceback
                     traceback.print_exc()
                 
-                # 重置accumulator
+                # 重置accumulator为下次评估做准备
                 metrics_accumulator.reset()
 
 

@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --output=jobs/Job.%j.out
 #SBATCH --error=jobs/Job.%j.err
-#SBATCH --cpus-per-task=32
+#SBATCH --cpus-per-task=10
 #SBATCH --mem=64GB
 #SBATCH --account=pr_119_tandon_priority
-#SBATCH --time=32:00:00
-#SBATCH --gres=gpu:1      
+#SBATCH --time=48:00:00
+#SBATCH --gres=gpu:rtx8000:1      
 #SBATCH --mail-type=ALL          
 #SBATCH --mail-user=zl4789@nyu.edu
 #SBATCH --requeue

@@ -32,7 +32,7 @@ class AmazonReviews(InMemoryDataset, PreprocessingMixin):
     def __init__(
         self,
         root: str,
-        split: str,  # 'beauty', 'sports', 'toys'
+        split: str,  # 'beauty', 'sports', 'toys', 'cds_and_vinyls'
         transform: Optional[Callable] = None,
         pre_transform: Optional[Callable] = None,
         force_reload: bool = False,
