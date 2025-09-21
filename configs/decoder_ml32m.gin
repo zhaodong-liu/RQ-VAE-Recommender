@@ -1,7 +1,7 @@
 import data.processed
 
 # 调试用的安全配置
-train.iterations=300000              # 极少迭代数用于调试
+train.iterations=400000              # 极少迭代数用于调试
 train.batch_size=512             # 较小batch size
 train.learning_rate=0.0003
 train.weight_decay=0.01

@@ -402,7 +402,8 @@ def train(
                         data = batch_to(batch, device)
                         
                         # 对于Amazon数据集，限制batch size以避免内存问题
-                        test_batch_size = min(4, data.user_ids.shape[0])
+                        test_batch_size = data.user_ids.shape[0]
+                        print(f"🔍 Batch {batch_idx+1}/{max_eval_batches}: 处理 {test_batch_size} 条数据")
                         small_data = SeqBatch(
                             user_ids=data.user_ids[:test_batch_size],
                             ids=data.ids[:test_batch_size],

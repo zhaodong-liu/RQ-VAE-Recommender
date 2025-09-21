@@ -1,10 +1,10 @@
 import data.processed
 import modules.model
 
-train.iterations=200000
+train.iterations=300000
 train.learning_rate=0.0003
 train.weight_decay=0.035
-train.batch_size=1024
+train.batch_size=512
 train.vae_input_dim=768
 train.vae_hidden_dims=[512, 256, 128]
 train.vae_embed_dim=32  
@@ -20,9 +20,9 @@ train.save_dir_root="out/decoder/amazon/"
 train.dataset_folder="dataset/amazon"
 train.dataset=%data.processed.RecDataset.AMAZON
 train.force_dataset_process=False
-train.full_eval_every=10000
+train.full_eval_every=100000
 train.partial_eval_every=5000
-train.dataset_split="beauty"
+train.dataset_split="sports"
 train.dropout_p=0.3
 train.attn_heads=8
 train.attn_embed_dim=512

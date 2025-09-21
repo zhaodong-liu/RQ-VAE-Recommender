@@ -542,7 +542,7 @@ def train(
                                                     "best_recall_10": current_recall_10,
                                                     "eval_metrics": eval_metrics
                                                 }
-                                                torch.save(best_checkpoint, f"{save_dir}/best_model.pt")
+                                                torch.save(best_checkpoint, f"{save_dir_root}/best_model.pt")
                                                 print(f"💾 Saved best model with Recall@10: {current_recall_10:.4f}")
                                 
                             else:
